@@ -1,0 +1,100 @@
+use std::io::Write;
+use serde::{Deserialize, Serialize};
+use sha3::Digest as Sha3Digest;
+use secp256k1::{Secp256k1, SecretKey, Message, ecdsa::RecoverableSignature};
+
+/// The body for a VAA.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Body {
+    /// The timestamp of the block this message was published in.
+    /// Seconds since UNIX epoch
+    pub timestamp: u32,
+    pub nonce: u32,
+    pub emitter_chain: u16,
+    pub emitter_address: [u8; 32],
+    pub sequence: u64,
+    pub consistency_level: u8,
+    pub payload: Vec<u8>,
+}
+
+/// Digest data for the Body.
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Digest {
+    /// Guardians don't hash the VAA body directly, instead they hash the VAA and sign the hash. The
+    /// purpose of this is it means when submitting a VAA on-chain we only have to submit the hash
+    /// which reduces gas costs.
+    pub hash: [u8; 32],
+
+    /// The secp256k_hash is the hash of the hash of the VAA. The reason we provide this is because
+    /// of how secp256k works internally. It hashes its payload before signing. This means that
+    /// when verifying secp256k signatures, we're actually checking if a guardian has signed the
+    /// hash of the hash of the VAA. Functions such as `ecrecover` expect the secp256k hash rather
+    /// than the original payload.
+    pub secp256k_hash: [u8; 32],
+}
+
+#[derive(Debug)]
+pub enum Error {
+    #[allow(dead_code)]
+    DigestFailed(serde_wormhole::Error),
+    #[allow(dead_code)]
+    InvalidSecretKey(secp256k1::Error),
+}
+
+impl Body {
+    /// Body Digest Components.
+    ///
+    /// A VAA is distinguished by the unique 256bit Keccak256 hash of its body. This hash is
+    /// utilised in all Wormhole components for identifying unique VAA's, including the bridge,
+    /// modules, and core guardian software. The `Digest` is documented with reasoning for
+    /// each field.
+    ///
+    /// NOTE: This function uses a library to do Keccak256 hashing, but on-chain this may not be
+    /// efficient. If efficiency is needed, consider calling `serde_wormhole::to_writer` instead
+    /// and hashing the result using on-chain primitives.
+    #[inline]
+    fn digest(&self) -> Result<[u8; 32], Error> {
+        // The `body` of the VAA is hashed to produce a `digest` of the VAA.
+        let hash: [u8; 32] = {
+            let mut h = sha3::Keccak256::default();
+            serde_wormhole::to_writer(&mut h, self).map_err(|e| Error::DigestFailed(e))?;
+            h.finalize().into()
+        };
+
+        // Hash `hash` again to get the secp256k internal hash, see `Digest` for detail.
+        let secp256k_hash: [u8; 32] = {
+            let mut h = sha3::Keccak256::default();
+            h.write_all(&hash).map_err(|e| Error::DigestFailed(e.into()))?;
+            h.finalize().into()
+        };
+
+        Ok(secp256k_hash)
+    }
+
+    pub fn sign(&self, secret_key: [u8; 32]) -> Result<[u8; 65], Error> {
+        let secp = Secp256k1::new();
+        let digest = self.digest()?;
+        let secret_key = SecretKey::from_slice(&secret_key).map_err(|e| Error::InvalidSecretKey(e))?;
+        let signature = secp.sign_ecdsa_recoverable(
+            Message::from_digest(digest),
+            &secret_key,
+        );
+        let (recovery_id, signature_bytes) = signature.serialize_compact();
+        let recovery_id: i32 = recovery_id.into();
+        let mut result = [0u8; 65];
+        result[..64].copy_from_slice(&signature_bytes);
+        result[64] = recovery_id as u8;
+        Ok(result)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SignedBody {
+    pub version: u8,
+    pub guardian_set_index: u32,
+    #[serde(with = "crate::serde_array")]
+    pub signature: [u8; 65],
+
+    #[serde(flatten)]
+    pub body: Body,
+}
