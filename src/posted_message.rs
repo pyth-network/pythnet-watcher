@@ -1,23 +1,24 @@
-use borsh::{
-    BorshDeserialize,
-    BorshSerialize,
-};
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use std::{
-    io::{
-        Error,
-        ErrorKind::InvalidData,
-        Write,
+use {
+    borsh::{
+        BorshDeserialize,
+        BorshSerialize,
     },
-    ops::{
-        Deref,
-        DerefMut,
+    serde::{
+        Deserialize,
+        Serialize,
+    },
+    std::{
+        io::{
+            Error,
+            ErrorKind::InvalidData,
+            Write,
+        },
+        ops::{
+            Deref,
+            DerefMut,
+        },
     },
 };
-
 
 #[repr(transparent)]
 #[derive(Default)]

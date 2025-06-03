@@ -1,72 +1,88 @@
-use borsh::BorshDeserialize;
-use observation::{Body, SignedBody};
-use posted_message::PostedMessageUnreliableData;
-use secp256k1::SecretKey;
-use solana_account_decoder::UiAccountEncoding;
-use solana_client::{
-    nonblocking::pubsub_client::PubsubClient, pubsub_client::PubsubClientError, rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig}
+use {
+    borsh::BorshDeserialize,
+    clap::Parser,
+    core::panic,
+    observation::{
+        Body,
+        SignedBody,
+    },
+    posted_message::PostedMessageUnreliableData,
+    secp256k1::SecretKey,
+    solana_account_decoder::UiAccountEncoding,
+    solana_client::{
+        nonblocking::pubsub_client::PubsubClient,
+        pubsub_client::PubsubClientError,
+        rpc_config::{
+            RpcAccountInfoConfig,
+            RpcProgramAccountsConfig,
+        },
+    },
+    solana_sdk::pubkey::Pubkey,
+    std::{
+        fs,
+        str::FromStr,
+        time::Duration,
+    },
+    tokio::time::sleep,
+    tokio_stream::StreamExt,
 };
-use solana_sdk::pubkey::Pubkey;
-use tokio::time::sleep;
-use core::panic;
-use std::{fs, path::PathBuf, str::FromStr, time::Duration};
-use tokio_stream::StreamExt;
-use clap::Parser;
 
-mod posted_message;
-mod observation;
-mod serde_array;
 mod config;
+mod observation;
+mod posted_message;
+mod serde_array;
 
 const PYTHNET_CHAIN_ID: u16 = 26;
 
 struct ListenerConfig {
-    ws_url: String,
-    secret_key: SecretKey,
-    wormhole_pid: Pubkey,
+    ws_url:              String,
+    secret_key:          SecretKey,
+    wormhole_pid:        Pubkey,
     accumulator_address: Pubkey,
 }
 
-fn find_message_pda(
-    wormhole_pid: &Pubkey,
-    ring_index: u32,
-) -> Pubkey {
+fn find_message_pda(wormhole_pid: &Pubkey, ring_index: u32) -> Pubkey {
     Pubkey::find_program_address(
         &[b"AccumulatorMessage", &ring_index.to_be_bytes()],
         wormhole_pid,
-    ).0
+    )
+    .0
 }
 
 async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
     let client = PubsubClient::new(config.ws_url.as_str()).await?;
-    let (mut stream, unsubscribe) = client.program_subscribe(
-        &config.wormhole_pid,
-        Some(RpcProgramAccountsConfig { 
-            filters: None,
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(UiAccountEncoding::Base64),
-                data_slice: None,
-                commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
-                min_context_slot: None,
-            }, 
-            with_context: None, 
-            sort_results: None
-        }),
-    )
-    .await?;
+    let (mut stream, unsubscribe) = client
+        .program_subscribe(
+            &config.wormhole_pid,
+            Some(RpcProgramAccountsConfig {
+                filters:        None,
+                account_config: RpcAccountInfoConfig {
+                    encoding:         Some(UiAccountEncoding::Base64),
+                    data_slice:       None,
+                    commitment:       Some(
+                        solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+                    ),
+                    min_context_slot: None,
+                },
+                with_context:   None,
+                sort_results:   None,
+            }),
+        )
+        .await?;
 
     while let Some(update) = stream.next().await {
-        let message_pda = find_message_pda(
-            &config.wormhole_pid, 
-            (update.context.slot % 10_000) as u32
-        );
+        let message_pda =
+            find_message_pda(&config.wormhole_pid, (update.context.slot % 10_000) as u32);
         if message_pda.to_string() != update.value.pubkey {
             continue; // Skip updates that are not for the expected PDA
         }
 
-        let unreliable_data: Option<PostedMessageUnreliableData> = update.value.account.data.decode().map(|data| {
-            BorshDeserialize::deserialize(&mut data.as_slice()).ok()
-        }).flatten();
+        let unreliable_data: Option<PostedMessageUnreliableData> = update
+            .value
+            .account
+            .data
+            .decode()
+            .and_then(|data| BorshDeserialize::deserialize(&mut data.as_slice()).ok());
 
         if let Some(unreliable_data) = unreliable_data {
             if PYTHNET_CHAIN_ID != unreliable_data.emitter_chain {
@@ -77,13 +93,13 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
             }
 
             let body = Body {
-                timestamp: unreliable_data.submission_time,
-                nonce: unreliable_data.nonce,
-                emitter_chain: unreliable_data.emitter_chain,
-                emitter_address: unreliable_data.emitter_address,
-                sequence: unreliable_data.sequence,
+                timestamp:         unreliable_data.submission_time,
+                nonce:             unreliable_data.nonce,
+                emitter_chain:     unreliable_data.emitter_chain,
+                emitter_address:   unreliable_data.emitter_address,
+                sequence:          unreliable_data.sequence,
                 consistency_level: unreliable_data.consistency_level,
-                payload: unreliable_data.payload.clone(),
+                payload:           unreliable_data.payload.clone(),
             };
 
             match body.sign(config.secret_key.secret_bytes()) {
@@ -105,7 +121,9 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
         unsubscribe().await
     });
 
-    Err(PubsubClientError::ConnectionClosed("Stream ended".to_string()))
+    Err(PubsubClientError::ConnectionClosed(
+        "Stream ended".to_string(),
+    ))
 }
 
 fn load_secret_key(path: String) -> SecretKey {
@@ -115,7 +133,10 @@ fn load_secret_key(path: String) -> SecretKey {
         return SecretKey::from_byte_array(byte_array).expect("Invalid secret key length");
     }
 
-    let content = fs::read_to_string(path).expect("Invalid secret key file").trim().to_string();
+    let content = fs::read_to_string(path)
+        .expect("Invalid secret key file")
+        .trim()
+        .to_string();
     if let Ok(secret_key) = SecretKey::from_str(&content) {
         return secret_key;
     }
@@ -127,18 +148,24 @@ fn load_secret_key(path: String) -> SecretKey {
 async fn main() {
     let run_options = config::RunOptions::parse();
     let secret_key = load_secret_key(run_options.secret_key_path);
-    let client = PubsubClient::new(&run_options.pythnet_url).await.expect("Invalid WebSocket URL");
+    let client = PubsubClient::new(&run_options.pythnet_url)
+        .await
+        .expect("Invalid WebSocket URL");
     drop(client); // Drop the client to avoid holding the connection open
-    let accumulator_address = Pubkey::from_str(&run_options.accumulator_address).expect("Invalid accumulator address");
-    let wormhole_pid = Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
+    let accumulator_address =
+        Pubkey::from_str(&run_options.accumulator_address).expect("Invalid accumulator address");
+    let wormhole_pid =
+        Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
 
     loop {
-        if let Err(e) = run_listener(ListenerConfig { 
+        if let Err(e) = run_listener(ListenerConfig {
             ws_url: run_options.pythnet_url.clone(),
-            secret_key, 
-            wormhole_pid, 
+            secret_key,
+            wormhole_pid,
             accumulator_address,
-        }).await {
+        })
+        .await
+        {
             tracing::error!(error = ?e, "Error listening to messages");
             sleep(Duration::from_millis(200)).await; // Wait before retrying
         }

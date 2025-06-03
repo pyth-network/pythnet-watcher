@@ -1,9 +1,18 @@
-use std::{fmt, mem::MaybeUninit};
-
-use serde::{
-    de::{Error, SeqAccess, Visitor},
-    ser::SerializeTuple,
-    Deserializer, Serializer,
+use {
+    serde::{
+        de::{
+            Error,
+            SeqAccess,
+            Visitor,
+        },
+        ser::SerializeTuple,
+        Deserializer,
+        Serializer,
+    },
+    std::{
+        fmt,
+        mem::MaybeUninit,
+    },
 };
 
 pub fn serialize<const N: usize, S>(value: &[u8; N], serializer: S) -> Result<S::Ok, S::Error>
