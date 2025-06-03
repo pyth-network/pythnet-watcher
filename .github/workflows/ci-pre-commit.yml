@@ -34,12 +34,6 @@ jobs:
           toolchain: nightly-2024-12-03
           components: rustfmt
 
-      - name: Run pre-commit on PR diff
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          pre-commit run --from-ref "${{ github.event.pull_request.base.sha }}" \
-                         --to-ref "${{ github.event.pull_request.head.sha }}"
-
-      - name: Run pre-commit on all files (non-PR pushes)
+      - name: Run pre-commit on all files
         if: ${{ github.event_name != 'pull_request' }}
         run: pre-commit run --all-files
