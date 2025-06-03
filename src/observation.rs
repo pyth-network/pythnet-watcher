@@ -1,9 +1,7 @@
 use std::io::Write;
 use serde::{Deserialize, Serialize};
-use serde_wormhole::RawMessage;
 use sha3::Digest as Sha3Digest;
 use secp256k1::{Secp256k1, SecretKey, Message};
-use wormhole_sdk::{Address, Chain};
 
 /// The body for a VAA.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,7 +75,6 @@ impl<P: Serialize> Body<P> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SignedBody<P> {
     pub version: u8,
-    pub guardian_set_index: u32,
     #[serde(with = "crate::serde_array")]
     pub signature: [u8; 65],
 
