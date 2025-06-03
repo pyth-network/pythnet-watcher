@@ -1,7 +1,7 @@
 use std::io::Write;
 use serde::{Deserialize, Serialize};
 use sha3::Digest as Sha3Digest;
-use secp256k1::{Secp256k1, SecretKey, Message, ecdsa::RecoverableSignature};
+use secp256k1::{Secp256k1, SecretKey, Message};
 
 /// The body for a VAA.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,22 +15,6 @@ pub struct Body {
     pub sequence: u64,
     pub consistency_level: u8,
     pub payload: Vec<u8>,
-}
-
-/// Digest data for the Body.
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Digest {
-    /// Guardians don't hash the VAA body directly, instead they hash the VAA and sign the hash. The
-    /// purpose of this is it means when submitting a VAA on-chain we only have to submit the hash
-    /// which reduces gas costs.
-    pub hash: [u8; 32],
-
-    /// The secp256k_hash is the hash of the hash of the VAA. The reason we provide this is because
-    /// of how secp256k works internally. It hashes its payload before signing. This means that
-    /// when verifying secp256k signatures, we're actually checking if a guardian has signed the
-    /// hash of the hash of the VAA. Functions such as `ecrecover` expect the secp256k hash rather
-    /// than the original payload.
-    pub secp256k_hash: [u8; 32],
 }
 
 #[derive(Debug)]
