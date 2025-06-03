@@ -23,6 +23,17 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.85.1
+          components: clippy
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly-2024-12-03
+          components: rustfmt
+
       - name: Run pre-commit on PR diff
         if: ${{ github.event_name == 'pull_request' }}
         run: |
