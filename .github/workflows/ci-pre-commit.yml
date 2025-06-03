@@ -26,7 +26,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: 1.85.1
+          toolchain: 1.87.0
           components: clippy
       - uses: actions-rs/toolchain@v1
         with:
