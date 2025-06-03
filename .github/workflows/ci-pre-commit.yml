@@ -35,5 +35,4 @@ jobs:
           components: rustfmt
 
       - name: Run pre-commit on all files
-        if: ${{ github.event_name != 'pull_request' }}
         run: pre-commit run --all-files
