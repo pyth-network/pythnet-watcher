@@ -16,3 +16,4 @@ solana-sdk = "2.2.2"
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.41"
+wormhole-sdk = { git = "https://github.com/wormhole-foundation/wormhole", tag = "v2.17.1" }

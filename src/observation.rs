@@ -1,11 +1,13 @@
 use std::io::Write;
 use serde::{Deserialize, Serialize};
+use serde_wormhole::RawMessage;
 use sha3::Digest as Sha3Digest;
 use secp256k1::{Secp256k1, SecretKey, Message};
+use wormhole_sdk::{Address, Chain};
 
 /// The body for a VAA.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Body {
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Body<P> {
     /// The timestamp of the block this message was published in.
     /// Seconds since UNIX epoch
     pub timestamp: u32,
@@ -14,7 +16,7 @@ pub struct Body {
     pub emitter_address: [u8; 32],
     pub sequence: u64,
     pub consistency_level: u8,
-    pub payload: Vec<u8>,
+    pub payload: P,
 }
 
 #[derive(Debug)]
@@ -25,7 +27,7 @@ pub enum Error {
     InvalidSecretKey(secp256k1::Error),
 }
 
-impl Body {
+impl<P: Serialize> Body<P> {
     /// Body Digest Components.
     ///
     /// A VAA is distinguished by the unique 256bit Keccak256 hash of its body. This hash is
@@ -72,13 +74,13 @@ impl Body {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SignedBody {
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SignedBody<P> {
     pub version: u8,
     pub guardian_set_index: u32,
     #[serde(with = "crate::serde_array")]
     pub signature: [u8; 65],
 
     #[serde(flatten)]
-    pub body: Body,
+    pub body: Body<P>,
 }
