@@ -5,7 +5,7 @@ repos:
       - id: cargo-fmt-workspace
         name: Cargo format for workspace
         language: "rust"
-        entry: cargo +nightly-2024-12-03 fmt --manifest-path ./Cargo.toml --all -- --config-path rustfmt.toml
+        entry: cargo +1.87.0 fmt --manifest-path ./Cargo.toml --all
         pass_filenames: false
         types_or: ["rust", "cargo", "cargo-lock"]
         files: .
