@@ -105,11 +105,16 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
 
         match Observation::try_new(body, input.secret_key) {
             Ok(observation) => {
-                if let Err(e) = input.api_client.post_observation(observation).await {
-                    tracing::error!(error = ?e, "Failed to post observation");
-                } else {
-                    tracing::info!("Observation posted successfully");
-                }
+                tokio::spawn({
+                    let api_client = input.api_client.clone();
+                    async move {
+                        if let Err(e) = api_client.post_observation(observation).await {
+                            tracing::error!(error = ?e, "Failed to post observation");
+                        } else {
+                            tracing::info!("Observation posted successfully");
+                        }
+                    }
+                });
             }
             Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
         };
