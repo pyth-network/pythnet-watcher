@@ -2729,7 +2729,6 @@ dependencies = [
  "clap",
  "secp256k1",
  "serde",
- "serde_wormhole",
  "sha3",
  "solana-account-decoder",
  "solana-client",
