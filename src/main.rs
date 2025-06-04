@@ -1,8 +1,5 @@
 use {
-    api_client::{
-        ApiClient,
-        Observation,
-    },
+    api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
@@ -26,11 +23,11 @@ mod config;
 mod posted_message;
 
 struct RunListenerInput {
-    ws_url:              String,
-    secret_key:          SecretKey,
-    wormhole_pid:        Pubkey,
+    ws_url: String,
+    secret_key: SecretKey,
+    wormhole_pid: Pubkey,
     accumulator_address: Pubkey,
-    api_client:          ApiClient,
+    api_client: ApiClient,
 }
 
 fn find_message_pda(wormhole_pid: &Pubkey, slot: u64) -> Pubkey {

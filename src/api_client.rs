@@ -1,18 +1,8 @@
 use {
-    reqwest::{
-        Client,
-        Url,
-    },
-    secp256k1::{
-        Message,
-        Secp256k1,
-        SecretKey,
-    },
+    reqwest::{Client, Url},
+    secp256k1::{Message, Secp256k1, SecretKey},
     serde::Serialize,
-    std::{
-        sync::Arc,
-        time::Duration,
-    },
+    std::{sync::Arc, time::Duration},
     wormhole_sdk::vaa::Body,
 };
 
@@ -21,7 +11,7 @@ pub struct ApiClientConfig {
 }
 
 struct ApiClientInner {
-    client:   Client,
+    client: Client,
     base_url: Url,
 }
 
@@ -34,10 +24,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Observation<P> {
-    pub version:   u8,
+    pub version: u8,
     #[serde(with = "hex::serde")]
     pub signature: [u8; 65],
-    pub body:      Body<P>,
+    pub body: Body<P>,
 }
 
 impl<P: Serialize> Observation<P> {
