@@ -8,28 +8,14 @@ use {
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
         pubsub_client::PubsubClientError,
-        rpc_config::{
-            RpcAccountInfoConfig,
-            RpcProgramAccountsConfig,
-        },
-        rpc_filter::{
-            Memcmp,
-            RpcFilterType,
-        },
+        rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
+        rpc_filter::{Memcmp, RpcFilterType},
     },
     solana_sdk::pubkey::Pubkey,
-    std::{
-        fs,
-        str::FromStr,
-        time::Duration,
-    },
+    std::{fs, str::FromStr, time::Duration},
     tokio::time::sleep,
     tokio_stream::StreamExt,
-    wormhole_sdk::{
-        vaa::Body,
-        Address,
-        Chain,
-    },
+    wormhole_sdk::{vaa::Body, Address, Chain},
 };
 
 mod config;
@@ -37,9 +23,9 @@ mod posted_message;
 mod signed_body;
 
 struct ListenerConfig {
-    ws_url:              String,
-    secret_key:          SecretKey,
-    wormhole_pid:        Pubkey,
+    ws_url: String,
+    secret_key: SecretKey,
+    wormhole_pid: Pubkey,
     accumulator_address: Pubkey,
 }
 
@@ -58,20 +44,18 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
         .program_subscribe(
             &config.wormhole_pid,
             Some(RpcProgramAccountsConfig {
-                filters:        Some(vec![RpcFilterType::Memcmp(Memcmp::new(
+                filters: Some(vec![RpcFilterType::Memcmp(Memcmp::new(
                     0,
                     solana_client::rpc_filter::MemcmpEncodedBytes::Bytes(b"msu".to_vec()),
                 ))]),
                 account_config: RpcAccountInfoConfig {
-                    encoding:         Some(UiAccountEncoding::Base64),
-                    data_slice:       None,
-                    commitment:       Some(
-                        solana_sdk::commitment_config::CommitmentConfig::confirmed(),
-                    ),
+                    encoding: Some(UiAccountEncoding::Base64),
+                    data_slice: None,
+                    commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
                     min_context_slot: None,
                 },
-                with_context:   None,
-                sort_results:   None,
+                with_context: None,
+                sort_results: None,
             }),
         )
         .await?;
@@ -109,13 +93,13 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
         }
 
         let body = Body {
-            timestamp:         unreliable_data.submission_time,
-            nonce:             unreliable_data.nonce,
-            emitter_chain:     unreliable_data.emitter_chain.into(),
-            emitter_address:   Address(unreliable_data.emitter_address),
-            sequence:          unreliable_data.sequence,
+            timestamp: unreliable_data.submission_time,
+            nonce: unreliable_data.nonce,
+            emitter_chain: unreliable_data.emitter_chain.into(),
+            emitter_address: Address(unreliable_data.emitter_address),
+            sequence: unreliable_data.sequence,
             consistency_level: unreliable_data.consistency_level,
-            payload:           unreliable_data.payload.clone(),
+            payload: unreliable_data.payload.clone(),
         };
 
         match SignedBody::try_new(body, config.secret_key) {

@@ -1,18 +1,14 @@
 use {
-    secp256k1::{
-        Message,
-        Secp256k1,
-        SecretKey,
-    },
+    secp256k1::{Message, Secp256k1, SecretKey},
     serde::Serialize,
     wormhole_sdk::vaa::Body,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SignedBody<P> {
-    pub version:   u8,
+    pub version: u8,
     pub signature: [u8; 65],
-    pub body:      Body<P>,
+    pub body: Body<P>,
 }
 
 impl<P: Serialize> SignedBody<P> {

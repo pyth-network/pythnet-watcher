@@ -31,7 +31,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly-2024-12-03
+          toolchain: 1.87.0
           components: rustfmt
 
       - name: Run pre-commit on all files
