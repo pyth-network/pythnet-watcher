@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.98"
 borsh = "0.9.3"
 clap = { version = "4.5.39", features = ["derive", "env"] }
 secp256k1 = { version = "0.31.0", features = ["recovery"] }
@@ -16,3 +17,4 @@ solana-sdk = "2.2.2"
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.41"
+wormhole-vaas-serde = "0.1.0"

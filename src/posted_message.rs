@@ -20,13 +20,7 @@ use {
     },
 };
 
-#[repr(transparent)]
-#[derive(Default)]
-pub struct PostedMessageData {
-    pub message: MessageData,
-}
-
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct PostedMessageUnreliableData {
     pub message: MessageData,
 }
@@ -63,63 +57,6 @@ pub struct MessageData {
     /// Message payload
     pub payload: Vec<u8>,
 }
-
-// PostedMessageData impls
-
-impl BorshSerialize for PostedMessageData {
-    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(b"msg")?;
-        BorshSerialize::serialize(&self.message, writer)
-    }
-}
-
-impl BorshDeserialize for PostedMessageData {
-    fn deserialize(buf: &mut &[u8]) -> std::io::Result<Self> {
-        if buf.len() < 3 {
-            return Err(Error::new(InvalidData, "Not enough bytes"));
-        }
-
-        let expected = b"msg";
-        let magic: &[u8] = &buf[0..3];
-        if magic != expected {
-            return Err(Error::new(
-                InvalidData,
-                format!(
-                    "Magic mismatch. Expected {:?} but got {:?}",
-                    expected, magic
-                ),
-            ));
-        };
-        *buf = &buf[3..];
-        Ok(PostedMessageData {
-            message: <MessageData as BorshDeserialize>::deserialize(buf)?,
-        })
-    }
-}
-
-impl Deref for PostedMessageData {
-    type Target = MessageData;
-
-    fn deref(&self) -> &Self::Target {
-        &self.message
-    }
-}
-
-impl DerefMut for PostedMessageData {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.message
-    }
-}
-
-impl Clone for PostedMessageData {
-    fn clone(&self) -> Self {
-        PostedMessageData {
-            message: self.message.clone(),
-        }
-    }
-}
-
-// PostedMessageUnreliableData impls
 
 impl BorshSerialize for PostedMessageUnreliableData {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -163,13 +100,5 @@ impl Deref for PostedMessageUnreliableData {
 impl DerefMut for PostedMessageUnreliableData {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.message
-    }
-}
-
-impl Clone for PostedMessageUnreliableData {
-    fn clone(&self) -> Self {
-        PostedMessageUnreliableData {
-            message: self.message.clone(),
-        }
     }
 }
