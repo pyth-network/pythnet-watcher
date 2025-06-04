@@ -1,6 +1,8 @@
 use {
-    crate::api_client::ApiClient,
-    api_client::Observation,
+    api_client::{
+        ApiClient,
+        Observation,
+    },
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
