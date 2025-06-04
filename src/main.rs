@@ -1,9 +1,10 @@
 use {
+    crate::api_client::ApiClient,
+    api_client::Observation,
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
     secp256k1::SecretKey,
-    signed_body::SignedBody,
     solana_account_decoder::UiAccountEncoding,
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
@@ -18,15 +19,16 @@ use {
     wormhole_sdk::{vaa::Body, Address, Chain},
 };
 
+mod api_client;
 mod config;
 mod posted_message;
-mod signed_body;
 
-struct ListenerConfig {
-    ws_url: String,
-    secret_key: SecretKey,
-    wormhole_pid: Pubkey,
+struct RunListenerInput {
+    ws_url:              String,
+    secret_key:          SecretKey,
+    wormhole_pid:        Pubkey,
     accumulator_address: Pubkey,
+    api_client:          ApiClient,
 }
 
 fn find_message_pda(wormhole_pid: &Pubkey, slot: u64) -> Pubkey {
@@ -38,11 +40,11 @@ fn find_message_pda(wormhole_pid: &Pubkey, slot: u64) -> Pubkey {
     .0
 }
 
-async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
-    let client = PubsubClient::new(config.ws_url.as_str()).await?;
+async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> {
+    let client = PubsubClient::new(input.ws_url.as_str()).await?;
     let (mut stream, unsubscribe) = client
         .program_subscribe(
-            &config.wormhole_pid,
+            &input.wormhole_pid,
             Some(RpcProgramAccountsConfig {
                 filters: Some(vec![RpcFilterType::Memcmp(Memcmp::new(
                     0,
@@ -61,7 +63,7 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
         .await?;
 
     while let Some(update) = stream.next().await {
-        if find_message_pda(&config.wormhole_pid, update.context.slot).to_string()
+        if find_message_pda(&input.wormhole_pid, update.context.slot).to_string()
             != update.value.pubkey
         {
             continue; // Skip updates that are not for the expected PDA
@@ -88,7 +90,7 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
         if Chain::Pythnet != unreliable_data.emitter_chain.into() {
             continue;
         }
-        if config.accumulator_address != Pubkey::from(unreliable_data.emitter_address) {
+        if input.accumulator_address != Pubkey::from(unreliable_data.emitter_address) {
             continue;
         }
 
@@ -102,9 +104,15 @@ async fn run_listener(config: ListenerConfig) -> Result<(), PubsubClientError> {
             payload: unreliable_data.payload.clone(),
         };
 
-        match SignedBody::try_new(body, config.secret_key) {
-            Ok(signed_body) => println!("Signed Body: {:?}", signed_body),
-            Err(e) => tracing::error!(error = ?e, "Failed to sign body"),
+        match Observation::try_new(body, input.secret_key) {
+            Ok(observation) => {
+                if let Err(e) = input.api_client.post_observation(observation).await {
+                    tracing::error!(error = ?e, "Failed to post observation");
+                } else {
+                    tracing::info!("Observation posted successfully");
+                }
+            }
+            Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
         };
     }
 
@@ -141,13 +149,16 @@ async fn main() {
         .expect("Invalid accumulator address");
     let wormhole_pid =
         Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
+    let api_client =
+        ApiClient::try_new(run_options.server_url, None).expect("Failed to create API client");
 
     loop {
-        if let Err(e) = run_listener(ListenerConfig {
+        if let Err(e) = run_listener(RunListenerInput {
             ws_url: run_options.pythnet_url.clone(),
             secret_key,
             wormhole_pid,
             accumulator_address,
+            api_client: api_client.clone(),
         })
         .await
         {

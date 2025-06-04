@@ -14,5 +14,7 @@ pub struct RunOptions {
         env = "WORMHOLE_PID",
         default_value = "H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU"
     )]
-    pub wormhole_pid: String,
+    pub wormhole_pid:    String,
+    #[arg(long = "server-url", env = "SERVER_URL")]
+    pub server_url:      String,
 }
