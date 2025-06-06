@@ -4,6 +4,7 @@ use {
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
     secp256k1::SecretKey,
+    serde_wormhole::RawMessage,
     solana_account_decoder::UiAccountEncoding,
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
@@ -93,31 +94,30 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
             continue;
         }
 
-        let body = Body {
-            timestamp: unreliable_data.submission_time,
-            nonce: unreliable_data.nonce,
-            emitter_chain: unreliable_data.emitter_chain.into(),
-            emitter_address: Address(unreliable_data.emitter_address),
-            sequence: unreliable_data.sequence,
-            consistency_level: unreliable_data.consistency_level,
-            payload: unreliable_data.payload.clone(),
-        };
-
-        match Observation::try_new(body, input.secret_key) {
-            Ok(observation) => {
-                tokio::spawn({
-                    let api_client = input.api_client.clone();
-                    async move {
+        tokio::spawn({
+            let api_client = input.api_client.clone();
+            async move {
+                let body = Body {
+                    timestamp: unreliable_data.submission_time,
+                    nonce: unreliable_data.nonce,
+                    emitter_chain: unreliable_data.emitter_chain.into(),
+                    emitter_address: Address(unreliable_data.emitter_address),
+                    sequence: unreliable_data.sequence,
+                    consistency_level: unreliable_data.consistency_level,
+                    payload: RawMessage::new(unreliable_data.payload.as_slice()),
+                };
+                match Observation::try_new(body.clone(), input.secret_key) {
+                    Ok(observation) => {
                         if let Err(e) = api_client.post_observation(observation).await {
                             tracing::error!(error = ?e, "Failed to post observation");
                         } else {
                             tracing::info!("Observation posted successfully");
-                        }
+                        };
                     }
-                });
+                    Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
+                }
             }
-            Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
-        };
+        });
     }
 
     tokio::spawn(async move { unsubscribe().await });
