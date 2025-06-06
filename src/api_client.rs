@@ -23,11 +23,21 @@ pub struct ApiClient {
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Observation<P> {
+pub struct Observation<P: Serialize> {
     pub version: u8,
     #[serde(with = "hex::serde")]
     pub signature: [u8; 65],
+    #[serde(serialize_with = "serialize_body")]
     pub body: Body<P>,
+}
+
+fn serialize_body<S, P>(body: &Body<P>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    P: Serialize,
+{
+    let serialized = serde_wormhole::to_vec(body).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_bytes(&serialized)
 }
 
 impl<P: Serialize> Observation<P> {
