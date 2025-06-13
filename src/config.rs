@@ -18,3 +18,18 @@ pub struct RunOptions {
     #[arg(long = "server-url", env = "SERVER_URL")]
     pub server_url: String,
 }
+
+#[derive(Parser, Clone, Debug)]
+pub struct GenerateKeyOptions {
+    /// Output path for the generated secret key.
+    #[arg(long = "output-file", env = "OUTPUT_FILE")]
+    pub output_path: String,
+}
+
+#[derive(Parser, Debug)]
+pub enum Command {
+    /// Run the auction server service.
+    Run(RunOptions),
+    /// Run db migrations and exit.
+    GenerateKey(GenerateKeyOptions),
+}

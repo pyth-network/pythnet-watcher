@@ -9,7 +9,7 @@ borsh = "0.9.3"
 clap = { version = "4.5.39", features = ["derive", "env"] }
 hex = { version = "0.4.3", features = ["serde"] }
 reqwest = { version = "0.12.19", features = ["json"] }
-secp256k1 = { version = "0.31.0", features = ["recovery"] }
+secp256k1 = { version = "0.30.0", features = ["recovery", "rand"] }
 serde = "1.0.219"
 serde_wormhole = "0.1.0"
 sha3 = "0.10.8"
@@ -19,6 +19,7 @@ solana-sdk = "2.2.2"
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 wormhole-vaas-serde = "0.1.0"
 
 [dev-dependencies]
