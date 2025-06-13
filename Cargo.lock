@@ -2926,6 +2926,7 @@ dependencies = [
  "reqwest 0.12.19",
  "secp256k1",
  "serde",
+ "serde_json",
  "serde_wormhole",
  "sha3",
  "solana-account-decoder",

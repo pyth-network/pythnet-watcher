@@ -111,3 +111,91 @@ impl ApiClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use secp256k1::{
+        ecdsa::{RecoverableSignature, RecoveryId},
+        PublicKey,
+    };
+    use serde_json::Value;
+    use serde_wormhole::RawMessage;
+    use wormhole_sdk::{Address, Chain};
+
+    use super::*;
+
+    #[test]
+    fn test_new_signed_observation() {
+        let secret_key = SecretKey::from_byte_array([1u8; 32]).expect("Invalid secret key length");
+        let body = Body {
+            timestamp: 1234567890,
+            nonce: 42,
+            emitter_chain: Chain::Solana,
+            emitter_address: Address([1u8; 32]),
+            sequence: 1000,
+            consistency_level: 1,
+            payload: vec![1, 2, 3, 4, 5],
+        };
+        let observation =
+            Observation::try_new(body.clone(), secret_key).expect("Failed to create observation");
+        assert_eq!(observation.version, 1);
+        assert_eq!(observation.body, body);
+
+        // Signature verification
+        let secp = Secp256k1::new();
+        let digest = body.digest().expect("Failed to compute digest");
+        let message = Message::from_digest(digest.secp256k_hash);
+
+        let recovery_id: RecoveryId = (observation.signature[64] as i32)
+            .try_into()
+            .expect("Invalid recovery ID");
+        let recoverable_sig =
+            RecoverableSignature::from_compact(&observation.signature[..64], recovery_id)
+                .expect("Invalid recoverable signature");
+
+        let pubkey = secp
+            .recover_ecdsa(message, &recoverable_sig)
+            .expect("Failed to recover pubkey");
+
+        let expected_pubkey = PublicKey::from_secret_key(&secp, &secret_key);
+        assert_eq!(pubkey, expected_pubkey);
+    }
+
+    #[test]
+    fn test_observation_serialization() {
+        let payload = vec![5, 1, 2, 3, 4, 5];
+        let observation = Observation {
+            version: 1,
+            signature: [1u8; 65],
+            body: Body {
+                timestamp: 1234567890,
+                nonce: 42,
+                emitter_chain: Chain::Solana,
+                emitter_address: Address([1u8; 32]),
+                sequence: 1000,
+                consistency_level: 1,
+                payload: RawMessage::new(payload.as_slice()),
+            },
+        };
+
+        let serialized =
+            serde_json::to_string(&observation).expect("Failed to serialize observation");
+        let parsed: Value = serde_json::from_str(&serialized).expect("Failed to parse JSON");
+
+        assert_eq!(parsed["version"], 1);
+        let sig = parsed["signature"]
+            .as_str()
+            .expect("Signature should be a string");
+        let decoded = hex::decode(sig).expect("Should be valid hex");
+        assert_eq!(decoded, observation.signature);
+
+        let message = parsed["body"].as_array().expect("Body should be an array");
+        let bytes = message
+            .iter()
+            .map(|v| v.as_u64().expect("Body elements should be u64") as u8)
+            .collect::<Vec<u8>>();
+        let deserialized: Body<&RawMessage> =
+            serde_wormhole::from_slice(&bytes).expect("Failed to deserialize body");
+        assert_eq!(deserialized, observation.body);
+    }
+}
