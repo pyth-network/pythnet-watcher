@@ -1,10 +1,12 @@
 use {
+    crate::config::Command,
     api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
-    secp256k1::SecretKey,
+    secp256k1::{rand::rngs::OsRng, PublicKey, Secp256k1, SecretKey},
     serde_wormhole::RawMessage,
+    sha3::{Digest, Keccak256},
     solana_account_decoder::UiAccountEncoding,
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
@@ -14,7 +16,7 @@ use {
         rpc_response::{Response, RpcKeyedAccount},
     },
     solana_sdk::pubkey::Pubkey,
-    std::{fs, str::FromStr, time::Duration},
+    std::{fs, io::IsTerminal, str::FromStr, time::Duration},
     tokio::time::sleep,
     tokio_stream::StreamExt,
     wormhole_sdk::{vaa::Body, Address, Chain},
@@ -162,7 +164,7 @@ fn load_secret_key(path: String) -> SecretKey {
     let bytes = fs::read(path.clone()).expect("Invalid secret key file");
     if bytes.len() == 32 {
         let byte_array: [u8; 32] = bytes.try_into().expect("Invalid secret key length");
-        return SecretKey::from_byte_array(byte_array).expect("Invalid secret key length");
+        return SecretKey::from_byte_array(&byte_array).expect("Invalid secret key length");
     }
 
     let content = fs::read_to_string(path)
@@ -172,9 +174,20 @@ fn load_secret_key(path: String) -> SecretKey {
     SecretKey::from_str(&content).expect("Invalid secret key")
 }
 
-#[tokio::main]
-async fn main() {
-    let run_options = config::RunOptions::parse();
+fn get_public_key(secret_key: &SecretKey) -> (PublicKey, [u8; 20]) {
+    let secp = Secp256k1::new();
+    let public_key = secret_key.public_key(&secp);
+    let pubkey_uncompressed = public_key.serialize_uncompressed();
+    let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
+        .finalize()
+        .into();
+    let pubkey_evm: [u8; 20] = pubkey_hash[pubkey_hash.len() - 20..]
+        .try_into()
+        .expect("Invalid address length");
+    (public_key, pubkey_evm)
+}
+
+async fn run(run_options: config::RunOptions) {
     let secret_key = load_secret_key(run_options.secret_key_path);
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
@@ -186,6 +199,14 @@ async fn main() {
         Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
     let api_client =
         ApiClient::try_new(run_options.server_url, None).expect("Failed to create API client");
+
+    let (pubkey, pubkey_evm) = get_public_key(&secret_key);
+    let evm_encded_public_key = format!("0x{}", hex::encode(pubkey_evm));
+    tracing::info!(
+        public_key = ?pubkey,
+        evm_encoded_public_key = ?evm_encded_public_key,
+        "Running listener...",
+    );
 
     loop {
         if let Err(e) = run_listener(RunListenerInput {
@@ -199,6 +220,45 @@ async fn main() {
         {
             tracing::error!(error = ?e, "Error listening to messages");
             sleep(Duration::from_millis(200)).await; // Wait before retrying
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    // Initialize a Tracing Subscriber
+    let fmt_builder = tracing_subscriber::fmt()
+        .with_file(false)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(std::io::stderr().is_terminal());
+
+    // Use the compact formatter if we're in a terminal, otherwise use the JSON formatter.
+    if std::io::stderr().is_terminal() {
+        tracing::subscriber::set_global_default(fmt_builder.compact().finish())
+            .expect("Failed to set global default subscriber");
+    } else {
+        tracing::subscriber::set_global_default(fmt_builder.json().finish())
+            .expect("Failed to set global default subscriber");
+    }
+
+    // Parse the command line arguments with StructOpt, will exit automatically on `--help` or
+    // with invalid arguments.
+    match Command::parse() {
+        Command::Run(run_options) => run(run_options).await,
+        Command::GenerateKey(opts) => {
+            let secp = Secp256k1::new();
+            let mut rng = OsRng;
+
+            // Generate keypair (secret + public key)
+            let (secret_key, _) = secp.generate_keypair(&mut rng);
+            fs::write(opts.output_path.clone(), secret_key.secret_bytes())
+                .expect("Failed to write secret key to file");
+            let (pubkey, pubkey_evm) = get_public_key(&secret_key);
+            tracing::info!("Generated secret key at: {}", opts.output_path);
+            tracing::info!("Public key: {}", pubkey);
+            tracing::info!("EVM encoded public key: 0x{}", hex::encode(pubkey_evm));
         }
     }
 }
