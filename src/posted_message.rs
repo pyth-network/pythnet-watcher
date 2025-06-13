@@ -1,3 +1,12 @@
+//! This module defines the `PostedMessage` structure used to parse and verify messages
+//! posted by the Wormhole protocol.
+//!
+//! ⚠️ Note: This is mostly a copy-paste from the Wormhole reference implementation.
+//! If you forget how it works or need updates, refer to the official source:
+//! https://github.com/wormhole-foundation/wormhole/blob/main/solana/bridge/program/src/accounts/posted_message.rs#
+//!
+//! Keep in sync if the upstream changes!
+
 use {
     borsh::{BorshDeserialize, BorshSerialize},
     serde::{Deserialize, Serialize},
