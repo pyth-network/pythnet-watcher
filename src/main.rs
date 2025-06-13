@@ -43,49 +43,55 @@ fn find_message_pda(wormhole_pid: &Pubkey, slot: u64) -> Pubkey {
 
 const FAILED_TO_DECODE: &str = "Failed to decode account data";
 const INVALID_UNRELIABLE_DATA_FORMAT: &str = "Invalid unreliable data format";
-
-#[derive(Debug)]
-enum VerifyUpdateError {
-    InvalidMessagePDA,
-    InvalidEmitterChain,
-    InvalidAccumulatorAddress,
-    #[allow(dead_code)]
-    DecodingError(String),
-}
+const INVALID_PDA_MESSAGE: &str = "Invalid PDA message";
+const INVALID_EMITTER_CHAIN: &str = "Invalid emitter chain";
+const INVALID_ACCUMULATOR_ADDRESS: &str = "Invalid accumulator address";
 
 fn decode_and_verify_update(
     wormhole_pid: &Pubkey,
     accumulator_address: &Pubkey,
     update: Response<RpcKeyedAccount>,
-) -> Result<PostedMessageUnreliableData, VerifyUpdateError> {
+) -> anyhow::Result<PostedMessageUnreliableData> {
     if find_message_pda(wormhole_pid, update.context.slot).to_string() != update.value.pubkey {
-        return Err(VerifyUpdateError::InvalidMessagePDA);
+        return Err(anyhow::anyhow!(INVALID_PDA_MESSAGE));
     }
-    let data = update
-        .value
-        .account
-        .data
-        .decode()
-        .ok_or(VerifyUpdateError::DecodingError(
-            FAILED_TO_DECODE.to_string(),
-        ))?;
+    let data = update.value.account.data.decode().ok_or_else(|| {
+        tracing::error!(
+            data = ?update.value.account.data,
+            "Failed to decode account data",
+        );
+        anyhow::anyhow!(FAILED_TO_DECODE)
+    })?;
     let unreliable_data: PostedMessageUnreliableData =
         BorshDeserialize::deserialize(&mut data.as_slice()).map_err(|e| {
-            VerifyUpdateError::DecodingError(format!("{}: {}", INVALID_UNRELIABLE_DATA_FORMAT, e))
+            tracing::error!(
+                data = ?data,
+                error = ?e,
+                "Failed to decode unreliable data",
+            );
+            anyhow::anyhow!(format!("{}: {}", INVALID_UNRELIABLE_DATA_FORMAT, e))
         })?;
 
     if Chain::Pythnet != unreliable_data.emitter_chain.into() {
-        return Err(VerifyUpdateError::InvalidEmitterChain);
+        tracing::error!(
+            emitter_chain = unreliable_data.emitter_chain,
+            "Invalid emitter chain"
+        );
+        return Err(anyhow::anyhow!(INVALID_EMITTER_CHAIN));
     }
 
     if accumulator_address != &Pubkey::from(unreliable_data.emitter_address) {
-        return Err(VerifyUpdateError::InvalidAccumulatorAddress);
+        tracing::error!(
+            emitter_address = ?unreliable_data.emitter_address,
+            "Invalid accumulator address"
+        );
+        return Err(anyhow::anyhow!(INVALID_ACCUMULATOR_ADDRESS));
     }
 
     Ok(unreliable_data)
 }
 
-fn new_body(unreliable_data: &PostedMessageUnreliableData) -> Body<&RawMessage> {
+fn message_data_to_body(unreliable_data: &PostedMessageUnreliableData) -> Body<&RawMessage> {
     Body {
         timestamp: unreliable_data.submission_time,
         nonce: unreliable_data.nonce,
@@ -124,18 +130,13 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
             match decode_and_verify_update(&input.wormhole_pid, &input.accumulator_address, update)
             {
                 Ok(data) => data,
-                Err(e) => {
-                    if !matches!(e, VerifyUpdateError::InvalidMessagePDA) {
-                        tracing::error!(error = ?e, "Received an invalid update");
-                    }
-                    continue;
-                }
+                Err(_) => continue,
             };
 
         tokio::spawn({
             let api_client = input.api_client.clone();
             async move {
-                let body = new_body(&unreliable_data);
+                let body = message_data_to_body(&unreliable_data);
                 match Observation::try_new(body.clone(), input.secret_key) {
                     Ok(observation) => {
                         if let Err(e) = api_client.post_observation(observation).await {
@@ -204,11 +205,12 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use base64::Engine;
     use borsh::BorshSerialize;
     use solana_account_decoder::{UiAccount, UiAccountData};
 
-    use super::*;
     use crate::posted_message::MessageData;
 
     fn get_wormhole_pid() -> Pubkey {
@@ -279,7 +281,7 @@ mod tests {
     #[test]
     fn test_get_body() {
         let unreliable_data = get_unreliable_data();
-        let body = new_body(&unreliable_data);
+        let body = message_data_to_body(&unreliable_data);
         assert_eq!(body.timestamp, unreliable_data.submission_time);
         assert_eq!(body.nonce, unreliable_data.nonce);
         assert_eq!(body.emitter_chain, Chain::Pythnet);
@@ -337,7 +339,7 @@ mod tests {
         update.context.slot += 1;
         let result =
             decode_and_verify_update(&get_wormhole_pid(), &get_accumulator_address(), update);
-        assert!(matches!(result, Err(VerifyUpdateError::InvalidMessagePDA)));
+        assert_eq!(result.unwrap_err().to_string(), INVALID_PDA_MESSAGE);
     }
 
     #[test]
@@ -347,9 +349,7 @@ mod tests {
             UiAccountData::Binary("invalid_base64".to_string(), UiAccountEncoding::Base64);
         let result =
             decode_and_verify_update(&get_wormhole_pid(), &get_accumulator_address(), update);
-        assert!(
-            matches!(result, Err(VerifyUpdateError::DecodingError(ref msg)) if msg == FAILED_TO_DECODE),
-        );
+        assert_eq!(result.unwrap_err().to_string(), FAILED_TO_DECODE);
     }
 
     #[test]
@@ -364,10 +364,7 @@ mod tests {
             INVALID_UNRELIABLE_DATA_FORMAT,
             "Magic mismatch. Expected [109, 115, 117] but got [4, 1, 2]"
         );
-        assert!(
-            matches!(result, Err(VerifyUpdateError::DecodingError(ref msg)) 
-            if *msg == error_message)
-        );
+        assert_eq!(result.unwrap_err().to_string(), error_message);
     }
 
     #[test]
@@ -379,10 +376,7 @@ mod tests {
             &get_accumulator_address(),
             get_update(unreliable_data),
         );
-        assert!(matches!(
-            result,
-            Err(VerifyUpdateError::InvalidEmitterChain)
-        ));
+        assert_eq!(result.unwrap_err().to_string(), INVALID_EMITTER_CHAIN);
     }
 
     #[test]
@@ -394,9 +388,6 @@ mod tests {
             &get_accumulator_address(),
             get_update(unreliable_data),
         );
-        assert!(matches!(
-            result,
-            Err(VerifyUpdateError::InvalidAccumulatorAddress)
-        ));
+        assert_eq!(result.unwrap_err().to_string(), INVALID_ACCUMULATOR_ADDRESS);
     }
 }
