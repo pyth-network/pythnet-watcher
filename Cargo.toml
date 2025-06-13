@@ -20,3 +20,6 @@ tokio = "1.45.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.41"
 wormhole-vaas-serde = "0.1.0"
+
+[dev-dependencies]
+serde_json = "1.0.140"
