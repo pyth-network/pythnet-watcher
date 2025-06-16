@@ -44,7 +44,7 @@ impl<P: Serialize> Observation<P> {
     pub fn try_new(body: Body<P>, secret_key: SecretKey) -> Result<Self, anyhow::Error> {
         let digest = body.digest()?;
         let signature = Secp256k1::new()
-            .sign_ecdsa_recoverable(Message::from_digest(digest.secp256k_hash), &secret_key);
+            .sign_ecdsa_recoverable(&Message::from_digest(digest.secp256k_hash), &secret_key);
         let (recovery_id, signature_bytes) = signature.serialize_compact();
         let recovery_id: i32 = recovery_id.into();
         let mut signature = [0u8; 65];
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_new_signed_observation() {
-        let secret_key = SecretKey::from_byte_array([1u8; 32]).expect("Invalid secret key length");
+        let secret_key = SecretKey::from_byte_array(&[1u8; 32]).expect("Invalid secret key length");
         let body = Body {
             timestamp: 1234567890,
             nonce: 42,
@@ -154,7 +154,7 @@ mod tests {
                 .expect("Invalid recoverable signature");
 
         let pubkey = secp
-            .recover_ecdsa(message, &recoverable_sig)
+            .recover_ecdsa(&message, &recoverable_sig)
             .expect("Failed to recover pubkey");
 
         let expected_pubkey = PublicKey::from_secret_key(&secp, &secret_key);

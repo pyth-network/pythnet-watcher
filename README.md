@@ -23,9 +23,10 @@ cargo build
 ### ▶️ Run the Project
 
 You can run the project using `cargo run` by passing the required flags:
+Make sure to set `RUST_LOG=INFO` to enable logs from tracing:
 
 ```bash
-cargo run -- \
+RUST_LOG=INFO cargo run -- run \
   --pythnet-url wss://api2.pythnet.pyth.network \
   --server-url https://watcher.pyth.network \
   --secret-key /path/to/secret.key \
@@ -43,9 +44,22 @@ export PYTHNET_URL=wss://api2.pythnet.pyth.network
 export SERVER_URL=https://watcher.pyth.network
 export SECRET_KEY=/path/to/secret.key
 export WORMHOLE_PID=H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
+export RUST_LOG=INFO
 
 cargo run
 ```
+
+---
+
+### 🔑 Generate a Secret Key
+
+To generate a new secp256k1 secret key and write it to a file:
+
+```bash
+RUST_LOG=INFO cargo run -- generate-key --output-file .secret
+```
+
+This will save the key in raw byte format to the file named `.secret`.
 
 ---
 
