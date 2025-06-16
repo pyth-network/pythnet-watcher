@@ -44,8 +44,9 @@ export PYTHNET_URL=wss://api2.pythnet.pyth.network
 export SERVER_URL=https://watcher.pyth.network
 export SECRET_KEY=/path/to/secret.key
 export WORMHOLE_PID=H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
+export RUST_LOG=INFO
 
-RUST_LOG=INFO cargo run
+cargo run
 ```
 
 ---
