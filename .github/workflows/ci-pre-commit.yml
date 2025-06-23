@@ -15,6 +15,9 @@ jobs:
           # Need to grab the history of the PR
           fetch-depth: 0
 
+      - name: Install system dependencies
+        run: sudo apt update && sudo apt install -y pkg-config nettle-dev
+        
       - name: Set up Python (for pre-commit)
         uses: actions/setup-python@v5
         with:
