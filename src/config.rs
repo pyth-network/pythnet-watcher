@@ -1,5 +1,11 @@
 use clap::Parser;
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum Mode {
+    Production,
+    Development,
+}
+
 #[derive(Parser, Clone, Debug)]
 pub struct RunOptions {
     /// The API key to use for auction server authentication.
@@ -17,6 +23,8 @@ pub struct RunOptions {
     pub wormhole_pid: String,
     #[arg(long = "server-url", env = "SERVER_URL")]
     pub server_url: String,
+    #[arg(long = "mode", env = "MODE", default_value = "production")]
+    pub mode: Mode,
 }
 
 #[derive(Parser, Clone, Debug)]
