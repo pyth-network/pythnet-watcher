@@ -4,7 +4,9 @@ use {
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
+    prost::Message,
     secp256k1::{rand::rngs::OsRng, PublicKey, Secp256k1, SecretKey},
+    sequoia_openpgp::armor::{Kind, Reader, ReaderMode, Writer},
     serde_wormhole::RawMessage,
     sha3::{Digest, Keccak256},
     solana_account_decoder::UiAccountEncoding,
@@ -16,7 +18,12 @@ use {
         rpc_response::{Response, RpcKeyedAccount},
     },
     solana_sdk::pubkey::Pubkey,
-    std::{fs, io::IsTerminal, str::FromStr, time::Duration},
+    std::{
+        fs,
+        io::{Cursor, IsTerminal, Read, Write},
+        str::FromStr,
+        time::Duration,
+    },
     tokio::time::sleep,
     tokio_stream::StreamExt,
     wormhole_sdk::{vaa::Body, Address, Chain},
@@ -160,18 +167,43 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
     ))
 }
 
-fn load_secret_key(path: String) -> SecretKey {
-    let bytes = fs::read(path.clone()).expect("Invalid secret key file");
-    if bytes.len() == 32 {
-        let byte_array: [u8; 32] = bytes.try_into().expect("Invalid secret key length");
-        return SecretKey::from_byte_array(&byte_array).expect("Invalid secret key length");
+#[derive(Clone, PartialEq, Message)]
+pub struct GuardianKey {
+    #[prost(bytes = "vec", tag = "1")]
+    pub data: Vec<u8>,
+    #[prost(bool, tag = "2")]
+    pub unsafe_deterministic_key: bool,
+}
+
+const GUARDIAN_KEY_ARMORED_BLOCK: &str = "WORMHOLE GUARDIAN PRIVATE KEY";
+const STANDARD_ARMOR_LINE_HEADER: &str = "PGP PRIVATE KEY BLOCK";
+
+fn parse_and_verify_proto_guardian_key(content: String, mode: crate::config::Mode) -> GuardianKey {
+    let content = content.replace(GUARDIAN_KEY_ARMORED_BLOCK, STANDARD_ARMOR_LINE_HEADER);
+    let cursor = Cursor::new(content);
+    let mut armor_reader = Reader::from_reader(cursor, ReaderMode::Tolerant(Some(Kind::SecretKey)));
+
+    let mut buf = Vec::new();
+    armor_reader
+        .read_to_end(&mut buf)
+        .expect("Failed to read armored content");
+
+    let guardian_key =
+        GuardianKey::decode(&mut buf.as_slice()).expect("Failed to decode GuardianKey");
+
+    if let crate::config::Mode::Production = mode {
+        if guardian_key.unsafe_deterministic_key {
+            panic!("Unsafe deterministic key is not allowed in production mode");
+        }
     }
 
-    let content = fs::read_to_string(path)
-        .expect("Invalid secret key file")
-        .trim()
-        .to_string();
-    SecretKey::from_str(&content).expect("Invalid secret key")
+    guardian_key
+}
+
+fn load_secret_key(run_options: config::RunOptions) -> SecretKey {
+    let content = fs::read_to_string(run_options.secret_key_path).expect("Failed to read file");
+    let guardian_key = parse_and_verify_proto_guardian_key(content, run_options.mode);
+    SecretKey::from_slice(&guardian_key.data).expect("Failed to create SecretKey from bytes")
 }
 
 fn get_public_key(secret_key: &SecretKey) -> (PublicKey, [u8; 20]) {
@@ -188,7 +220,7 @@ fn get_public_key(secret_key: &SecretKey) -> (PublicKey, [u8; 20]) {
 }
 
 async fn run(run_options: config::RunOptions) {
-    let secret_key = load_secret_key(run_options.secret_key_path);
+    let secret_key = load_secret_key(run_options.clone());
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
         .expect("Invalid WebSocket URL");
@@ -253,9 +285,30 @@ async fn main() {
 
             // Generate keypair (secret + public key)
             let (secret_key, _) = secp.generate_keypair(&mut rng);
-            fs::write(opts.output_path.clone(), secret_key.secret_bytes())
-                .expect("Failed to write secret key to file");
             let (pubkey, pubkey_evm) = get_public_key(&secret_key);
+
+            let guardian_key = GuardianKey {
+                data: secret_key.secret_bytes().to_vec(),
+                unsafe_deterministic_key: false,
+            };
+            let mut writer = Writer::with_headers(
+                Vec::new(),
+                Kind::SecretKey,
+                vec![("PublicKey", format!("0x{}", hex::encode(pubkey_evm)))],
+            )
+            .expect("Failed to create writer");
+            writer
+                .write_all(guardian_key.encode_to_vec().as_slice())
+                .expect("Failed to write GuardianKey to writer");
+            let buffer = writer.finalize().expect("Failed to finalize writer");
+            let armored_string =
+                String::from_utf8(buffer).expect("Failed to convert buffer to string");
+            let armored_string =
+                armored_string.replace(STANDARD_ARMOR_LINE_HEADER, GUARDIAN_KEY_ARMORED_BLOCK);
+
+            fs::write(&opts.output_path, armored_string)
+                .expect("Failed to write GuardianKey to file");
+
             tracing::info!("Generated secret key at: {}", opts.output_path);
             tracing::info!("Public key: {}", pubkey);
             tracing::info!("EVM encoded public key: 0x{}", hex::encode(pubkey_evm));
@@ -449,5 +502,31 @@ mod tests {
             get_update(unreliable_data),
         );
         assert_eq!(result.unwrap_err().to_string(), INVALID_ACCUMULATOR_ADDRESS);
+    }
+
+    #[test]
+    fn test_parse_and_verify_proto_guardian_key() {
+        // The content below is generated by keygen script at:
+        // https://github.com/wormhole-foundation/wormhole/blob/main/node/cmd/guardiand/keygen.go
+        let content = "-----BEGIN WORMHOLE GUARDIAN PRIVATE KEY-----
+            PublicKey: 0x30e41be3f10d3ac813f91e49e189bbb948d030be
+
+            CiDy8xJ7/1QMhEH5l2P1hoWO80DJlirWK2GBzXcgPoGAjw==
+            =FQTN
+            -----END WORMHOLE GUARDIAN PRIVATE KEY-----
+        "
+        .to_string();
+        let guardian_key = parse_and_verify_proto_guardian_key(content, config::Mode::Production);
+        assert!(!guardian_key.unsafe_deterministic_key);
+        let secret_key = SecretKey::from_slice(&guardian_key.data)
+            .expect("Failed to create SecretKey from bytes");
+        assert_eq!(
+            hex::encode(secret_key.secret_bytes()),
+            "f2f3127bff540c8441f99763f586858ef340c9962ad62b6181cd77203e81808f",
+        );
+        assert_eq!(
+            hex::encode(get_public_key(&secret_key).1),
+            "30e41be3f10d3ac813f91e49e189bbb948d030be",
+        );
     }
 }
