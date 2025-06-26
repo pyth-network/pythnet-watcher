@@ -1,14 +1,16 @@
 use {
-    crate::config::Command,
+    crate::{
+        config::Command,
+        signer::{GuardianKey, Signer, GUARDIAN_KEY_ARMORED_BLOCK, STANDARD_ARMOR_LINE_HEADER},
+    },
     api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
     posted_message::PostedMessageUnreliableData,
     prost::Message,
-    secp256k1::{rand::rngs::OsRng, PublicKey, Secp256k1, SecretKey},
-    sequoia_openpgp::armor::{Kind, Reader, ReaderMode, Writer},
+    secp256k1::{rand::rngs::OsRng, Secp256k1},
+    sequoia_openpgp::armor::{Kind, Writer},
     serde_wormhole::RawMessage,
-    sha3::{Digest, Keccak256},
     solana_account_decoder::UiAccountEncoding,
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
@@ -20,7 +22,7 @@ use {
     solana_sdk::pubkey::Pubkey,
     std::{
         fs,
-        io::{Cursor, IsTerminal, Read, Write},
+        io::{IsTerminal, Write},
         str::FromStr,
         time::Duration,
     },
@@ -32,10 +34,11 @@ use {
 mod api_client;
 mod config;
 mod posted_message;
+mod signer;
 
-struct RunListenerInput {
+struct RunListenerInput<T: Signer> {
     ws_url: String,
-    secret_key: SecretKey,
+    signer: T,
     wormhole_pid: Pubkey,
     accumulator_address: Pubkey,
     api_client: ApiClient,
@@ -112,7 +115,9 @@ fn message_data_to_body(unreliable_data: &PostedMessageUnreliableData) -> Body<&
     }
 }
 
-async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> {
+async fn run_listener<T: Signer + 'static>(
+    input: RunListenerInput<T>,
+) -> Result<(), PubsubClientError> {
     let client = PubsubClient::new(input.ws_url.as_str()).await?;
     let (mut stream, unsubscribe) = client
         .program_subscribe(
@@ -143,10 +148,10 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
             };
 
         tokio::spawn({
-            let api_client = input.api_client.clone();
+            let (api_client, signer) = (input.api_client.clone(), input.signer.clone());
             async move {
                 let body = message_data_to_body(&unreliable_data);
-                match Observation::try_new(body.clone(), input.secret_key) {
+                match Observation::try_new(body.clone(), signer.clone()) {
                     Ok(observation) => {
                         if let Err(e) = api_client.post_observation(observation).await {
                             tracing::error!(error = ?e, "Failed to post observation");
@@ -167,60 +172,8 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
     ))
 }
 
-#[derive(Clone, PartialEq, Message)]
-pub struct GuardianKey {
-    #[prost(bytes = "vec", tag = "1")]
-    pub data: Vec<u8>,
-    #[prost(bool, tag = "2")]
-    pub unsafe_deterministic_key: bool,
-}
-
-const GUARDIAN_KEY_ARMORED_BLOCK: &str = "WORMHOLE GUARDIAN PRIVATE KEY";
-const STANDARD_ARMOR_LINE_HEADER: &str = "PGP PRIVATE KEY BLOCK";
-
-fn parse_and_verify_proto_guardian_key(content: String, mode: crate::config::Mode) -> GuardianKey {
-    let content = content.replace(GUARDIAN_KEY_ARMORED_BLOCK, STANDARD_ARMOR_LINE_HEADER);
-    let cursor = Cursor::new(content);
-    let mut armor_reader = Reader::from_reader(cursor, ReaderMode::Tolerant(Some(Kind::SecretKey)));
-
-    let mut buf = Vec::new();
-    armor_reader
-        .read_to_end(&mut buf)
-        .expect("Failed to read armored content");
-
-    let guardian_key =
-        GuardianKey::decode(&mut buf.as_slice()).expect("Failed to decode GuardianKey");
-
-    if let crate::config::Mode::Production = mode {
-        if guardian_key.unsafe_deterministic_key {
-            panic!("Unsafe deterministic key is not allowed in production mode");
-        }
-    }
-
-    guardian_key
-}
-
-fn load_secret_key(run_options: config::RunOptions) -> SecretKey {
-    let content = fs::read_to_string(run_options.secret_key_path).expect("Failed to read file");
-    let guardian_key = parse_and_verify_proto_guardian_key(content, run_options.mode);
-    SecretKey::from_slice(&guardian_key.data).expect("Failed to create SecretKey from bytes")
-}
-
-fn get_public_key(secret_key: &SecretKey) -> (PublicKey, [u8; 20]) {
-    let secp = Secp256k1::new();
-    let public_key = secret_key.public_key(&secp);
-    let pubkey_uncompressed = public_key.serialize_uncompressed();
-    let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
-        .finalize()
-        .into();
-    let pubkey_evm: [u8; 20] = pubkey_hash[pubkey_hash.len() - 20..]
-        .try_into()
-        .expect("Invalid address length");
-    (public_key, pubkey_evm)
-}
-
 async fn run(run_options: config::RunOptions) {
-    let secret_key = load_secret_key(run_options.clone());
+    let signer = signer::Local::try_new(run_options.clone()).expect("Failed to create signer");
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
         .expect("Invalid WebSocket URL");
@@ -232,7 +185,7 @@ async fn run(run_options: config::RunOptions) {
     let api_client =
         ApiClient::try_new(run_options.server_url, None).expect("Failed to create API client");
 
-    let (pubkey, pubkey_evm) = get_public_key(&secret_key);
+    let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
     let evm_encded_public_key = format!("0x{}", hex::encode(pubkey_evm));
     tracing::info!(
         public_key = ?pubkey,
@@ -243,7 +196,7 @@ async fn run(run_options: config::RunOptions) {
     loop {
         if let Err(e) = run_listener(RunListenerInput {
             ws_url: run_options.pythnet_url.clone(),
-            secret_key,
+            signer: signer.clone(),
             wormhole_pid,
             accumulator_address,
             api_client: api_client.clone(),
@@ -285,7 +238,8 @@ async fn main() {
 
             // Generate keypair (secret + public key)
             let (secret_key, _) = secp.generate_keypair(&mut rng);
-            let (pubkey, pubkey_evm) = get_public_key(&secret_key);
+            let signer = signer::Local { secret_key };
+            let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
 
             let guardian_key = GuardianKey {
                 data: secret_key.secret_bytes().to_vec(),
@@ -322,6 +276,7 @@ mod tests {
 
     use base64::Engine;
     use borsh::BorshSerialize;
+    use secp256k1::SecretKey;
     use solana_account_decoder::{UiAccount, UiAccountData};
 
     use crate::posted_message::MessageData;
@@ -516,16 +471,21 @@ mod tests {
             -----END WORMHOLE GUARDIAN PRIVATE KEY-----
         "
         .to_string();
-        let guardian_key = parse_and_verify_proto_guardian_key(content, config::Mode::Production);
+        let guardian_key = crate::signer::Local::parse_and_verify_proto_guardian_key(
+            content,
+            config::Mode::Production,
+        )
+        .expect("Failed to parse and verify guardian key");
         assert!(!guardian_key.unsafe_deterministic_key);
         let secret_key = SecretKey::from_slice(&guardian_key.data)
             .expect("Failed to create SecretKey from bytes");
+        let signer = signer::Local { secret_key };
         assert_eq!(
             hex::encode(secret_key.secret_bytes()),
             "f2f3127bff540c8441f99763f586858ef340c9962ad62b6181cd77203e81808f",
         );
         assert_eq!(
-            hex::encode(get_public_key(&secret_key).1),
+            hex::encode(signer.get_public_key().expect("Failed to get public key").1),
             "30e41be3f10d3ac813f91e49e189bbb948d030be",
         );
     }
