@@ -1,6 +1,6 @@
 use {
+    crate::signer::Signer,
     reqwest::{Client, Url},
-    secp256k1::{Message, Secp256k1, SecretKey},
     serde::Serialize,
     std::{sync::Arc, time::Duration},
     wormhole_sdk::vaa::Body,
@@ -41,16 +41,11 @@ where
 }
 
 impl<P: Serialize> Observation<P> {
-    pub fn try_new(body: Body<P>, secret_key: SecretKey) -> Result<Self, anyhow::Error> {
+    pub fn try_new(body: Body<P>, signer: impl Signer) -> Result<Self, anyhow::Error> {
         let digest = body.digest()?;
-        let signature = Secp256k1::new()
-            .sign_ecdsa_recoverable(&Message::from_digest(digest.secp256k_hash), &secret_key);
-        let (recovery_id, signature_bytes) = signature.serialize_compact();
-        let recovery_id: i32 = recovery_id.into();
-        let mut signature = [0u8; 65];
-        signature[..64].copy_from_slice(&signature_bytes);
-        signature[64] = recovery_id as u8;
-
+        let signature = signer
+            .sign(digest.secp256k_hash)
+            .map_err(|e| anyhow::anyhow!("Failed to sign observation: {}", e))?;
         Ok(Self {
             version: 1,
             signature,
@@ -116,7 +111,7 @@ impl ApiClient {
 mod tests {
     use secp256k1::{
         ecdsa::{RecoverableSignature, RecoveryId},
-        PublicKey,
+        Message, PublicKey, Secp256k1, SecretKey,
     };
     use serde_json::Value;
     use serde_wormhole::RawMessage;
@@ -127,6 +122,7 @@ mod tests {
     #[test]
     fn test_new_signed_observation() {
         let secret_key = SecretKey::from_byte_array(&[1u8; 32]).expect("Invalid secret key length");
+        let signer = crate::signer::FileSigner { secret_key };
         let body = Body {
             timestamp: 1234567890,
             nonce: 42,
@@ -137,7 +133,7 @@ mod tests {
             payload: vec![1, 2, 3, 4, 5],
         };
         let observation =
-            Observation::try_new(body.clone(), secret_key).expect("Failed to create observation");
+            Observation::try_new(body.clone(), signer).expect("Failed to create observation");
         assert_eq!(observation.version, 1);
         assert_eq!(observation.body, body);
 
