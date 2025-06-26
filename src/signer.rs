@@ -14,7 +14,7 @@ use sha3::{Digest, Keccak256};
 #[async_trait]
 pub trait Signer: Send + Sync {
     async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]>;
-    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])>;
+    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])>;
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +73,17 @@ impl FileSigner {
     }
 }
 
+fn get_evm_public_key(public_key: &PublicKey) -> anyhow::Result<[u8; 20]> {
+    let pubkey_uncompressed = public_key.serialize_uncompressed();
+    let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
+        .finalize()
+        .into();
+    let pubkey_evm: [u8; 20] = pubkey_hash[pubkey_hash.len() - 20..]
+        .try_into()
+        .map_err(|e| anyhow::anyhow!("Failed to convert public key hash to EVM format: {}", e))?;
+    Ok(pubkey_evm)
+}
+
 #[async_trait]
 impl Signer for FileSigner {
     async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]> {
@@ -86,19 +97,10 @@ impl Signer for FileSigner {
         Ok(signature)
     }
 
-    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
+    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
         let secp = Secp256k1::new();
         let public_key = self.secret_key.public_key(&secp);
-        let pubkey_uncompressed = public_key.serialize_uncompressed();
-        let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
-            .finalize()
-            .into();
-        let pubkey_evm: [u8; 20] =
-            pubkey_hash[pubkey_hash.len() - 20..]
-                .try_into()
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to convert public key hash to EVM format: {}", e)
-                })?;
+        let pubkey_evm = get_evm_public_key(&public_key)?;
         Ok((public_key, pubkey_evm))
     }
 }
@@ -142,7 +144,20 @@ impl Signer for KMSSigner {
             })
     }
 
-    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
-        todo!()
+    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
+        let result = self
+            .client
+            .get_public_key()
+            .key_id(self.arn.to_string())
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get public key from KMS: {}", e))?;
+        let public_key = result
+            .public_key
+            .ok_or(anyhow::anyhow!("KMS did not return a public key"))?;
+        let public_key = PublicKey::from_slice(public_key.as_ref())
+            .map_err(|e| anyhow::anyhow!("Failed to create PublicKey from KMS: {}", e))?;
+        let pubkey_evm = get_evm_public_key(&public_key)?;
+        Ok((public_key, pubkey_evm))
     }
 }
