@@ -1,18 +1,19 @@
 use std::{
     fs,
     io::{Cursor, Read},
+    path::PathBuf,
+    str::FromStr,
 };
 
+use async_trait::async_trait;
 use prost::Message as ProstMessage;
 use secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
 use sequoia_openpgp::armor::{Kind, Reader, ReaderMode};
 use sha3::{Digest, Keccak256};
 
-use crate::config::RunOptions;
-
-pub trait Signer: Send + Sync + Sized + Clone {
-    fn try_new(run_options: RunOptions) -> anyhow::Result<Self>;
-    fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]>;
+#[async_trait]
+pub trait Signer: Send + Sync {
+    async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]>;
     fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])>;
 }
 
@@ -33,6 +34,16 @@ pub const GUARDIAN_KEY_ARMORED_BLOCK: &str = "WORMHOLE GUARDIAN PRIVATE KEY";
 pub const STANDARD_ARMOR_LINE_HEADER: &str = "PGP PRIVATE KEY BLOCK";
 
 impl FileSigner {
+    pub fn try_new(secret_key_path: PathBuf, mode: crate::config::Mode) -> anyhow::Result<Self> {
+        let content = fs::read_to_string(secret_key_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read secret key file: {}", e))?;
+        let guardian_key = Self::parse_and_verify_proto_guardian_key(content, mode)?;
+        Ok(FileSigner {
+            secret_key: SecretKey::from_slice(&guardian_key.data)
+                .map_err(|e| anyhow::anyhow!("Failed to create SecretKey: {}", e))?,
+        })
+    }
+
     pub fn parse_and_verify_proto_guardian_key(
         content: String,
         mode: crate::config::Mode,
@@ -62,18 +73,9 @@ impl FileSigner {
     }
 }
 
+#[async_trait]
 impl Signer for FileSigner {
-    fn try_new(run_options: RunOptions) -> anyhow::Result<Self> {
-        let content = fs::read_to_string(run_options.secret_key_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read secret key file: {}", e))?;
-        let guardian_key = Self::parse_and_verify_proto_guardian_key(content, run_options.mode)?;
-        Ok(FileSigner {
-            secret_key: SecretKey::from_slice(&guardian_key.data)
-                .map_err(|e| anyhow::anyhow!("Failed to create SecretKey: {}", e))?,
-        })
-    }
-
-    fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]> {
+    async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]> {
         let signature =
             Secp256k1::new().sign_ecdsa_recoverable(&Message::from_digest(data), &self.secret_key);
         let (recovery_id, signature_bytes) = signature.serialize_compact();
@@ -98,5 +100,49 @@ impl Signer for FileSigner {
                     anyhow::anyhow!("Failed to convert public key hash to EVM format: {}", e)
                 })?;
         Ok((public_key, pubkey_evm))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct KMSSigner {
+    client: aws_sdk_kms::Client,
+    arn: aws_arn::ResourceName,
+}
+
+impl KMSSigner {
+    pub async fn try_new(arn_string: String) -> anyhow::Result<Self> {
+        let config = aws_config::load_from_env().await;
+        let client = aws_sdk_kms::Client::new(&config);
+        let arn = aws_arn::ResourceName::from_str(&arn_string)?;
+        Ok(KMSSigner { client, arn })
+    }
+}
+
+#[async_trait]
+impl Signer for KMSSigner {
+    async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]> {
+        let result = self
+            .client
+            .sign()
+            .key_id(self.arn.to_string())
+            .message(data.to_vec().into())
+            .signing_algorithm(aws_sdk_kms::types::SigningAlgorithmSpec::EcdsaSha256)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to sign data with KMS: {}", e))?;
+        result
+            .signature
+            .ok_or_else(|| anyhow::anyhow!("KMS did not return a signature"))
+            .and_then(|sig| {
+                let sig = sig.into_inner();
+                let signature: [u8; 65] = sig
+                    .try_into()
+                    .map_err(|e| anyhow::anyhow!("Failed to convert KMS signature: {:?}", e))?;
+                Ok(signature)
+            })
+    }
+
+    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
+        todo!()
     }
 }
