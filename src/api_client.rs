@@ -41,10 +41,11 @@ where
 }
 
 impl<P: Serialize> Observation<P> {
-    pub fn try_new(body: Body<P>, signer: impl Signer) -> Result<Self, anyhow::Error> {
+    pub async fn try_new(body: Body<P>, signer: Arc<dyn Signer>) -> Result<Self, anyhow::Error> {
         let digest = body.digest()?;
         let signature = signer
             .sign(digest.secp256k_hash)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to sign observation: {}", e))?;
         Ok(Self {
             version: 1,
@@ -123,8 +124,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_new_signed_observation() {
+    #[tokio::test]
+    async fn test_new_signed_observation() {
         let secret_key = SecretKey::from_byte_array(&[1u8; 32]).expect("Invalid secret key length");
         let signer = crate::signer::FileSigner { secret_key };
         let body = Body {
@@ -136,8 +137,9 @@ mod tests {
             consistency_level: 1,
             payload: vec![1, 2, 3, 4, 5],
         };
-        let observation =
-            Observation::try_new(body.clone(), signer).expect("Failed to create observation");
+        let observation = Observation::try_new(body.clone(), Arc::new(signer))
+            .await
+            .expect("Failed to create observation");
         assert_eq!(observation.version, 1);
         assert_eq!(observation.body, body);
 

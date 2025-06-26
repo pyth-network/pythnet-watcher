@@ -25,6 +25,7 @@ use {
         fs,
         io::{IsTerminal, Write},
         str::FromStr,
+        sync::Arc,
         time::Duration,
     },
     tokio::time::sleep,
@@ -37,9 +38,9 @@ mod config;
 mod posted_message;
 mod signer;
 
-struct RunListenerInput<T: Signer> {
+struct RunListenerInput {
     ws_url: String,
-    signer: T,
+    signer: Arc<dyn Signer>,
     wormhole_pid: Pubkey,
     accumulator_address: Pubkey,
     api_clients: Vec<ApiClient>,
@@ -116,9 +117,7 @@ fn message_data_to_body(unreliable_data: &PostedMessageUnreliableData) -> Body<&
     }
 }
 
-async fn run_listener<T: Signer + 'static>(
-    input: RunListenerInput<T>,
-) -> Result<(), PubsubClientError> {
+async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> {
     let client = PubsubClient::new(input.ws_url.as_str()).await?;
     let (mut stream, unsubscribe) = client
         .program_subscribe(
@@ -152,7 +151,7 @@ async fn run_listener<T: Signer + 'static>(
             let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
             async move {
                 let body = message_data_to_body(&unreliable_data);
-                match Observation::try_new(body.clone(), signer.clone()) {
+                match Observation::try_new(body.clone(), signer.clone()).await {
                     Ok(observation) => {
                         join_all(api_clients.iter().map(|api_client| {
                             let observation = observation.clone();
@@ -179,8 +178,35 @@ async fn run_listener<T: Signer + 'static>(
     ))
 }
 
+async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn Signer>> {
+    match run_options.signer_uri.scheme() {
+        "file" => {
+            let signer = signer::FileSigner::try_new(
+                run_options
+                    .signer_uri
+                    .to_file_path()
+                    .map_err(|_| anyhow::anyhow!("Invalid file path in signer URI"))?,
+                run_options.mode,
+            )?;
+            Ok(Arc::new(signer))
+        }
+        "amazonkms" => {
+            let arn_string = run_options
+                .signer_uri
+                .as_str()
+                .strip_prefix(&format!("{}://", run_options.signer_uri.scheme()))
+                .ok_or_else(|| anyhow::anyhow!("Invalid Amazon KMS ARN in signer URI"))?;
+            let signer = signer::KMSSigner::try_new(arn_string.to_string()).await?;
+            Ok(Arc::new(signer))
+        }
+        _ => Err(anyhow::anyhow!("Unsupported signer URI scheme")),
+    }
+}
+
 async fn run(run_options: config::RunOptions) {
-    let signer = signer::FileSigner::try_new(run_options.clone()).expect("Failed to create signer");
+    let signer = get_signer(run_options.clone())
+        .await
+        .expect("Failed to create signer");
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
         .expect("Invalid WebSocket URL");
