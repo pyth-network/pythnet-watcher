@@ -17,7 +17,7 @@ pub trait Signer: Send + Sync + Sized + Clone {
 }
 
 #[derive(Clone, Debug)]
-pub struct Local {
+pub struct FileSigner {
     pub secret_key: SecretKey,
 }
 
@@ -32,7 +32,7 @@ pub struct GuardianKey {
 pub const GUARDIAN_KEY_ARMORED_BLOCK: &str = "WORMHOLE GUARDIAN PRIVATE KEY";
 pub const STANDARD_ARMOR_LINE_HEADER: &str = "PGP PRIVATE KEY BLOCK";
 
-impl Local {
+impl FileSigner {
     pub fn parse_and_verify_proto_guardian_key(
         content: String,
         mode: crate::config::Mode,
@@ -62,12 +62,12 @@ impl Local {
     }
 }
 
-impl Signer for Local {
+impl Signer for FileSigner {
     fn try_new(run_options: RunOptions) -> anyhow::Result<Self> {
         let content = fs::read_to_string(run_options.secret_key_path)
             .map_err(|e| anyhow::anyhow!("Failed to read secret key file: {}", e))?;
         let guardian_key = Self::parse_and_verify_proto_guardian_key(content, run_options.mode)?;
-        Ok(Local {
+        Ok(FileSigner {
             secret_key: SecretKey::from_slice(&guardian_key.data)
                 .map_err(|e| anyhow::anyhow!("Failed to create SecretKey: {}", e))?,
         })

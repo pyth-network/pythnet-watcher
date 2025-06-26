@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_new_signed_observation() {
         let secret_key = SecretKey::from_byte_array(&[1u8; 32]).expect("Invalid secret key length");
-        let signer = crate::signer::Local { secret_key };
+        let signer = crate::signer::FileSigner { secret_key };
         let body = Body {
             timestamp: 1234567890,
             nonce: 42,

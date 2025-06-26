@@ -173,7 +173,7 @@ async fn run_listener<T: Signer + 'static>(
 }
 
 async fn run(run_options: config::RunOptions) {
-    let signer = signer::Local::try_new(run_options.clone()).expect("Failed to create signer");
+    let signer = signer::FileSigner::try_new(run_options.clone()).expect("Failed to create signer");
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
         .expect("Invalid WebSocket URL");
@@ -238,7 +238,7 @@ async fn main() {
 
             // Generate keypair (secret + public key)
             let (secret_key, _) = secp.generate_keypair(&mut rng);
-            let signer = signer::Local { secret_key };
+            let signer = signer::FileSigner { secret_key };
             let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
 
             let guardian_key = GuardianKey {
@@ -471,7 +471,7 @@ mod tests {
             -----END WORMHOLE GUARDIAN PRIVATE KEY-----
         "
         .to_string();
-        let guardian_key = crate::signer::Local::parse_and_verify_proto_guardian_key(
+        let guardian_key = crate::signer::FileSigner::parse_and_verify_proto_guardian_key(
             content,
             config::Mode::Production,
         )
@@ -479,7 +479,7 @@ mod tests {
         assert!(!guardian_key.unsafe_deterministic_key);
         let secret_key = SecretKey::from_slice(&guardian_key.data)
             .expect("Failed to create SecretKey from bytes");
-        let signer = signer::Local { secret_key };
+        let signer = signer::FileSigner { secret_key };
         assert_eq!(
             hex::encode(secret_key.secret_bytes()),
             "f2f3127bff540c8441f99763f586858ef340c9962ad62b6181cd77203e81808f",
