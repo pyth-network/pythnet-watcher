@@ -28,10 +28,15 @@ Make sure to set `RUST_LOG=INFO` to enable logs from tracing:
 ```bash
 RUST_LOG=INFO cargo run -- run \
   --pythnet-url wss://api2.pythnet.pyth.network \
-  --server-url https://quorum.pyth.network \
+  --server-url https://quorum-1.pyth.network \
+  --server-url https://quorum-2.pyth.network \
+  --server-url https://quorum-3.pyth.network \
   --secret-key /path/to/secret.key \
   --wormhole-pid H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
 ```
+
+You can specify multiple `--server-url` flags to broadcast observations to more than one server.
+
 
 ---
 
@@ -41,13 +46,15 @@ Instead of CLI flags, you can also set environment variables:
 
 ```bash
 export PYTHNET_URL=wss://api2.pythnet.pyth.network
-export SERVER_URL=https://quorum.pyth.network
+export SERVER_URL=https://quorum-1.pyth.network,https://quorum-2.pyth.network,https://quorum-3.pyth.network
 export SECRET_KEY=/path/to/secret.key
 export WORMHOLE_PID=H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
 export RUST_LOG=INFO
 
 cargo run
 ```
+
+You can provide multiple server URLs in the `SERVER_URL` environment variable by separating them with commas.
 
 ---
 
