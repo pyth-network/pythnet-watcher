@@ -3266,6 +3266,7 @@ dependencies = [
  "base64 0.22.1",
  "borsh 0.9.3",
  "clap",
+ "futures",
  "hex",
  "prost",
  "reqwest 0.12.19",

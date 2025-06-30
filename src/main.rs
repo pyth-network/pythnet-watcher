@@ -6,6 +6,7 @@ use {
     api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
+    futures::future::join_all,
     posted_message::PostedMessageUnreliableData,
     prost::Message,
     secp256k1::{rand::rngs::OsRng, Secp256k1},
@@ -147,27 +148,27 @@ async fn run_listener<T: Signer + 'static>(
                 Err(_) => continue,
             };
 
-        input.api_clients.iter().for_each(|api_client| {
-            tokio::spawn({
-                let (unreliable_data, api_client, signer) = (
-                    unreliable_data.clone(),
-                    api_client.clone(),
-                    input.signer.clone()
-                );
-                async move {
-                    let body = message_data_to_body(&unreliable_data);
-                    match Observation::try_new(body.clone(), signer.clone()) {
-                        Ok(observation) => {
-                            if let Err(e) = api_client.post_observation(observation).await {
-                                tracing::error!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
-                            } else {
-                                tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
-                            };
-                        }
-                        Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
+        tokio::spawn({
+            let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
+            async move {
+                let body = message_data_to_body(&unreliable_data);
+                match Observation::try_new(body.clone(), signer.clone()) {
+                    Ok(observation) => {
+                        join_all(api_clients.iter().map(|api_client| {
+                            let observation = observation.clone();
+                            let api_client = api_client.clone();
+                            async move {
+                                if let Err(e) = api_client.post_observation(observation).await {
+                                    tracing::error!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
+                                } else {
+                                    tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
+                                }
+                            }
+                        })).await;
                     }
+                    Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
                 }
-            });
+            }
         });
     }
 
