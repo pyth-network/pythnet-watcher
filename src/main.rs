@@ -41,7 +41,7 @@ struct RunListenerInput<T: Signer> {
     signer: T,
     wormhole_pid: Pubkey,
     accumulator_address: Pubkey,
-    api_client: ApiClient,
+    api_clients: Vec<ApiClient>,
 }
 
 fn find_message_pda(wormhole_pid: &Pubkey, slot: u64) -> Pubkey {
@@ -147,21 +147,27 @@ async fn run_listener<T: Signer + 'static>(
                 Err(_) => continue,
             };
 
-        tokio::spawn({
-            let (api_client, signer) = (input.api_client.clone(), input.signer.clone());
-            async move {
-                let body = message_data_to_body(&unreliable_data);
-                match Observation::try_new(body.clone(), signer.clone()) {
-                    Ok(observation) => {
-                        if let Err(e) = api_client.post_observation(observation).await {
-                            tracing::error!(error = ?e, "Failed to post observation");
-                        } else {
-                            tracing::info!("Observation posted successfully");
-                        };
+        input.api_clients.iter().for_each(|api_client| {
+            tokio::spawn({
+                let (unreliable_data, api_client, signer) = (
+                    unreliable_data.clone(),
+                    api_client.clone(),
+                    input.signer.clone()
+                );
+                async move {
+                    let body = message_data_to_body(&unreliable_data);
+                    match Observation::try_new(body.clone(), signer.clone()) {
+                        Ok(observation) => {
+                            if let Err(e) = api_client.post_observation(observation).await {
+                                tracing::error!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
+                            } else {
+                                tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
+                            };
+                        }
+                        Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
                     }
-                    Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
                 }
-            }
+            });
         });
     }
 
@@ -182,8 +188,13 @@ async fn run(run_options: config::RunOptions) {
         .expect("Invalid accumulator address");
     let wormhole_pid =
         Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
-    let api_client =
-        ApiClient::try_new(run_options.server_url, None).expect("Failed to create API client");
+    let api_clients: Vec<ApiClient> = run_options
+        .server_urls
+        .into_iter()
+        .map(|server_url| {
+            ApiClient::try_new(server_url, None).expect("Failed to create API client")
+        })
+        .collect();
 
     let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
     let evm_encded_public_key = format!("0x{}", hex::encode(pubkey_evm));
@@ -199,7 +210,7 @@ async fn run(run_options: config::RunOptions) {
             signer: signer.clone(),
             wormhole_pid,
             accumulator_address,
-            api_client: api_client.clone(),
+            api_clients: api_clients.clone(),
         })
         .await
         {
