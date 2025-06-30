@@ -28,9 +28,9 @@ Make sure to set `RUST_LOG=INFO` to enable logs from tracing:
 ```bash
 RUST_LOG=INFO cargo run -- run \
   --pythnet-url wss://api2.pythnet.pyth.network \
-  --server-url https://quorum-green.pyth.network \
-  --server-url https://quorum-yellow.pyth.network \
-  --server-url https://quorum-cyan.pyth.network \
+  --server-url https://quorum-1.pyth.network \
+  --server-url https://quorum-2.pyth.network \
+  --server-url https://quorum-3.pyth.network \
   --secret-key /path/to/secret.key \
   --wormhole-pid H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
 ```
@@ -46,7 +46,7 @@ Instead of CLI flags, you can also set environment variables:
 
 ```bash
 export PYTHNET_URL=wss://api2.pythnet.pyth.network
-export SERVER_URL=https://quorum-green.pyth.network,https://quorum-yellow.pyth.network,https://quorum-cyan.pyth.network
+export SERVER_URL=https://quorum-1.pyth.network,https://quorum-2.pyth.network,https://quorum-3.pyth.network
 export SECRET_KEY=/path/to/secret.key
 export WORMHOLE_PID=H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU
 export RUST_LOG=INFO
