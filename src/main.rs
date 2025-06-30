@@ -159,7 +159,7 @@ async fn run_listener<T: Signer + 'static>(
                             let api_client = api_client.clone();
                             async move {
                                 if let Err(e) = api_client.post_observation(observation).await {
-                                    tracing::error!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
+                                    tracing::warn!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
                                 } else {
                                     tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
                                 }
