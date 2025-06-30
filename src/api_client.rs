@@ -55,6 +55,10 @@ impl<P: Serialize> Observation<P> {
 }
 
 impl ApiClient {
+    pub fn get_base_url(&self) -> &Url {
+        &self.inner.base_url
+    }
+
     pub fn try_new(
         base_url: String,
         config: Option<ApiClientConfig>,

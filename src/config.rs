@@ -21,8 +21,8 @@ pub struct RunOptions {
         default_value = "H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU"
     )]
     pub wormhole_pid: String,
-    #[arg(long = "server-url", env = "SERVER_URL")]
-    pub server_url: String,
+    #[arg(long = "server-url", env = "SERVER_URL", value_delimiter = ',')]
+    pub server_urls: Vec<String>,
     #[arg(long = "mode", env = "MODE", default_value = "production")]
     pub mode: Mode,
 }
