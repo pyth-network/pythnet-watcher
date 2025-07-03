@@ -1,5 +1,4 @@
 use clap::Parser;
-use reqwest::Url;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum Mode {
@@ -26,7 +25,7 @@ pub struct RunOptions {
     /// URI for the signer.
     /// https://github.com/wormhole-foundation/wormhole/blob/main/docs/guardian_signer.md
     #[arg(long = "signer-uri", env = "SIGNER_URI")]
-    pub signer_uri: Url,
+    pub signer_uri: String,
 }
 
 #[derive(Parser, Clone, Debug)]

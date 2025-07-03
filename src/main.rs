@@ -9,6 +9,7 @@ use {
     futures::future::join_all,
     posted_message::PostedMessageUnreliableData,
     prost::Message,
+    reqwest::Url,
     secp256k1::{rand::rngs::OsRng, Secp256k1},
     sequoia_openpgp::armor::{Kind, Writer},
     serde_wormhole::RawMessage,
@@ -179,11 +180,14 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
 }
 
 async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn Signer>> {
-    match run_options.signer_uri.scheme() {
+    let scheme = run_options.signer_uri.split("://").next().unwrap_or("");
+    println!("Using signer URI: {}", scheme);
+    match scheme {
         "file" => {
             let signer = signer::FileSigner::try_new(
                 run_options
                     .signer_uri
+                    .parse::<Url>()?
                     .to_file_path()
                     .map_err(|_| anyhow::anyhow!("Invalid file path in signer URI"))?,
                 run_options.mode,
@@ -194,9 +198,14 @@ async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn S
             let arn_string = run_options
                 .signer_uri
                 .as_str()
-                .strip_prefix(&format!("{}://", run_options.signer_uri.scheme()))
+                .strip_prefix("amazonkms://")
                 .ok_or_else(|| anyhow::anyhow!("Invalid Amazon KMS ARN in signer URI"))?;
-            let signer = signer::KMSSigner::try_new(arn_string.to_string()).await?;
+            println!("Using Amazon KMS signer with ARN: {}", arn_string);
+            let mut signer = signer::KMSSigner::try_new(arn_string.to_string()).await?;
+            signer
+                .get_and_cache_public_key()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to get public key: {}", e))?;
             Ok(Arc::new(signer))
         }
         _ => Err(anyhow::anyhow!("Unsupported signer URI scheme")),
