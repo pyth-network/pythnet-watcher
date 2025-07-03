@@ -81,7 +81,7 @@ impl FileSigner {
     }
 }
 
-fn get_evm_public_key(public_key: &PublicKey) -> anyhow::Result<[u8; 20]> {
+fn get_evm_address(public_key: &PublicKey) -> anyhow::Result<[u8; 20]> {
     let pubkey_uncompressed = public_key.serialize_uncompressed();
     let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
         .finalize()
@@ -108,7 +108,7 @@ impl Signer for FileSigner {
     async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
         let secp = Secp256k1::new();
         let public_key = self.secret_key.public_key(&secp);
-        let pubkey_evm = get_evm_public_key(&public_key)?;
+        let pubkey_evm = get_evm_address(&public_key)?;
         Ok((public_key, pubkey_evm))
     }
 }
@@ -235,7 +235,7 @@ impl Signer for KMSSigner {
         let public_key =
             PublicKey::from_slice(decoded_algorithm_identifier.subject_public_key.raw_bytes())
                 .map_err(|e| anyhow::anyhow!("Failed to create PublicKey from KMS: {}", e))?;
-        let pubkey_evm = get_evm_public_key(&public_key)?;
+        let pubkey_evm = get_evm_address(&public_key)?;
 
         Ok((public_key, pubkey_evm))
     }
