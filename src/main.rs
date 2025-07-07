@@ -226,10 +226,7 @@ async fn run(run_options: config::RunOptions) {
         })
         .collect();
 
-    let (pubkey, pubkey_evm) = signer
-        .get_public_key()
-        .await
-        .expect("Failed to get public key");
+    let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
     let evm_encded_public_key = format!("0x{}", hex::encode(pubkey_evm));
     tracing::info!(
         public_key = ?pubkey,
@@ -283,10 +280,7 @@ async fn main() {
             // Generate keypair (secret + public key)
             let (secret_key, _) = secp.generate_keypair(&mut rng);
             let signer = signer::FileSigner { secret_key };
-            let (pubkey, pubkey_evm) = signer
-                .get_public_key()
-                .await
-                .expect("Failed to get public key");
+            let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
 
             let guardian_key = GuardianKey {
                 data: secret_key.secret_bytes().to_vec(),
@@ -532,13 +526,7 @@ mod tests {
             "f2f3127bff540c8441f99763f586858ef340c9962ad62b6181cd77203e81808f",
         );
         assert_eq!(
-            hex::encode(
-                signer
-                    .get_public_key()
-                    .await
-                    .expect("Failed to get public key")
-                    .1
-            ),
+            hex::encode(signer.get_public_key().expect("Failed to get public key").1),
             "30e41be3f10d3ac813f91e49e189bbb948d030be",
         );
     }

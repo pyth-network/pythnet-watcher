@@ -22,7 +22,7 @@ use sha3::{Digest, Keccak256};
 #[async_trait]
 pub trait Signer: Send + Sync {
     async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]>;
-    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])>;
+    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])>;
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +105,7 @@ impl Signer for FileSigner {
         Ok(signature)
     }
 
-    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
+    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
         let secp = Secp256k1::new();
         let public_key = self.secret_key.public_key(&secp);
         let pubkey_evm = get_evm_address(&public_key)?;
@@ -117,24 +117,44 @@ impl Signer for FileSigner {
 pub struct KMSSigner {
     client: aws_sdk_kms::Client,
     arn: aws_arn::ResourceName,
-    public_key: Option<(PublicKey, [u8; 20])>,
+    public_key: (PublicKey, [u8; 20]),
 }
 
 impl KMSSigner {
+    async fn fetch_public_key(
+        client: &aws_sdk_kms::Client,
+        arn: &aws_arn::ResourceName,
+    ) -> anyhow::Result<(PublicKey, [u8; 20])> {
+        let result = client
+            .get_public_key()
+            .key_id(arn.to_string())
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get public key from KMS: {}", e))?;
+        let public_key = result
+            .public_key
+            .ok_or(anyhow::anyhow!("KMS did not return a public key"))?;
+        let decoded_algorithm_identifier = SubjectPublicKeyInfo::from_der(public_key.as_ref())
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to decode SubjectPublicKeyInfo from KMS: {}", e)
+            })?;
+        let public_key =
+            PublicKey::from_slice(decoded_algorithm_identifier.subject_public_key.raw_bytes())
+                .map_err(|e| anyhow::anyhow!("Failed to create PublicKey from KMS: {}", e))?;
+        let pubkey_evm = get_evm_address(&public_key)?;
+
+        Ok((public_key, pubkey_evm))
+    }
+
     pub async fn try_new(arn_string: String) -> anyhow::Result<Self> {
         let config = aws_config::load_from_env().await;
         let client = aws_sdk_kms::Client::new(&config);
         let arn = aws_arn::ResourceName::from_str(&arn_string)?;
-        let mut signer = KMSSigner {
+        Ok(KMSSigner {
+            public_key: Self::fetch_public_key(&client, &arn).await?,
             client,
             arn,
-            public_key: None,
-        };
-
-        let (public_key, pubkey_evm) = signer.get_public_key().await?;
-        signer.public_key = Some((public_key, pubkey_evm));
-
-        Ok(signer)
+        })
     }
 }
 
@@ -193,7 +213,7 @@ impl Signer for KMSSigner {
         signature[(32 - r_bytes.len())..32].copy_from_slice(r_bytes);
         signature[(64 - s_bytes.len())..64].copy_from_slice(decoded_signature.s.as_bytes());
 
-        let public_key = self.get_public_key().await?;
+        let public_key = self.get_public_key()?;
         for raw_id in 0..4 {
             let secp = Secp256k1::new();
             let recid = RecoveryId::try_from(raw_id)
@@ -214,30 +234,7 @@ impl Signer for KMSSigner {
         ))
     }
 
-    async fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
-        if let Some((public_key, pubkey_evm)) = &self.public_key {
-            return Ok((*public_key, *pubkey_evm));
-        }
-
-        let result = self
-            .client
-            .get_public_key()
-            .key_id(self.arn.to_string())
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get public key from KMS: {}", e))?;
-        let public_key = result
-            .public_key
-            .ok_or(anyhow::anyhow!("KMS did not return a public key"))?;
-        let decoded_algorithm_identifier = SubjectPublicKeyInfo::from_der(public_key.as_ref())
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to decode SubjectPublicKeyInfo from KMS: {}", e)
-            })?;
-        let public_key =
-            PublicKey::from_slice(decoded_algorithm_identifier.subject_public_key.raw_bytes())
-                .map_err(|e| anyhow::anyhow!("Failed to create PublicKey from KMS: {}", e))?;
-        let pubkey_evm = get_evm_address(&public_key)?;
-
-        Ok((public_key, pubkey_evm))
+    fn get_public_key(&self) -> anyhow::Result<(PublicKey, [u8; 20])> {
+        Ok(self.public_key)
     }
 }
