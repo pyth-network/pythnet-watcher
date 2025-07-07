@@ -11,9 +11,6 @@ pub struct RunOptions {
     /// The API key to use for auction server authentication.
     #[arg(long = "pythnet-url", env = "PYTHNET_URL")]
     pub pythnet_url: String,
-    /// Path to the file containing the secret key.
-    #[arg(long = "secret-key", env = "SECRET_KEY")]
-    pub secret_key_path: String,
     /// The Wormhole program ID.
     #[arg(
         long = "wormhole-pid",
@@ -25,6 +22,10 @@ pub struct RunOptions {
     pub server_urls: Vec<String>,
     #[arg(long = "mode", env = "MODE", default_value = "production")]
     pub mode: Mode,
+    /// URI for the signer.
+    /// https://github.com/wormhole-foundation/wormhole/blob/main/docs/guardian_signer.md
+    #[arg(long = "signer-uri", env = "SIGNER_URI")]
+    pub signer_uri: String,
 }
 
 #[derive(Parser, Clone, Debug)]
