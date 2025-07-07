@@ -181,7 +181,6 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
 
 async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn Signer>> {
     let scheme = run_options.signer_uri.split("://").next().unwrap_or("");
-    println!("Using signer URI: {}", scheme);
     match scheme {
         "file" => {
             let signer = signer::FileSigner::try_new(
@@ -200,12 +199,7 @@ async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn S
                 .as_str()
                 .strip_prefix("amazonkms://")
                 .ok_or_else(|| anyhow::anyhow!("Invalid Amazon KMS ARN in signer URI"))?;
-            println!("Using Amazon KMS signer with ARN: {}", arn_string);
-            let mut signer = signer::KMSSigner::try_new(arn_string.to_string()).await?;
-            signer
-                .get_and_cache_public_key()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to get public key: {}", e))?;
+            let signer = signer::KMSSigner::try_new(arn_string.to_string()).await?;
             Ok(Arc::new(signer))
         }
         _ => Err(anyhow::anyhow!("Unsupported signer URI scheme")),

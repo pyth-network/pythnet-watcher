@@ -125,38 +125,39 @@ impl KMSSigner {
         let config = aws_config::load_from_env().await;
         let client = aws_sdk_kms::Client::new(&config);
         let arn = aws_arn::ResourceName::from_str(&arn_string)?;
-        Ok(KMSSigner {
+        let mut signer = KMSSigner {
             client,
             arn,
             public_key: None,
-        })
-    }
+        };
 
-    pub async fn get_and_cache_public_key(&mut self) -> anyhow::Result<()> {
-        let (public_key, pubkey_evm) = self.get_public_key().await?;
-        self.public_key = Some((public_key, pubkey_evm));
-        Ok(())
+        let (public_key, pubkey_evm) = signer.get_public_key().await?;
+        signer.public_key = Some((public_key, pubkey_evm));
+
+        Ok(signer)
     }
 }
 
-/// X.509 `AlgorithmIdentifier` (same as above)
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Sequence)] // NOTE: added `Sequence`
-pub struct AlgorithmIdentifier<'a> {
-    /// This field contains an ASN.1 `OBJECT IDENTIFIER`, a.k.a. OID.
-    pub algorithm: ObjectIdentifier,
+// Use DER (Distinguished Encoding Rules) format to encode the public key and the signature.
+// - When retrieving the public key from AWS KMS using the GetPublicKey API
+//   (https://docs.aws.amazon.com/kms/latest/APIReference/API_GetPublicKey.html),
+//   note that the returned public key is DER-encoded in the SubjectPublicKeyInfo format,
+//   compliant with RFC 5280 / X.509 standards.
+// - When signing messages with ECDSA using the AWS KMS Sign API
+//   (https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html),
+//   the returned signature is a DER-encoded ASN.1 sequence containing the r and s values.
 
-    /// This field is `OPTIONAL` and contains the ASN.1 `ANY` type, which
-    /// in this example allows arbitrary algorithm-defined parameters.
+/// X.509 `AlgorithmIdentifier` (same as above)
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Sequence)]
+pub struct AlgorithmIdentifier<'a> {
+    pub algorithm: ObjectIdentifier,
     pub parameters: Option<AnyRef<'a>>,
 }
 
 /// X.509 `SubjectPublicKeyInfo` (SPKI)
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Sequence)]
 pub struct SubjectPublicKeyInfo<'a> {
-    /// X.509 `AlgorithmIdentifier`
     pub algorithm: AlgorithmIdentifier<'a>,
-
-    /// Public key data
     pub subject_public_key: BitStringRef<'a>,
 }
 
