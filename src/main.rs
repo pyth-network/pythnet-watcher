@@ -498,6 +498,18 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_and_verify_update_invalid_vaa_version() {
+        let mut unreliable_data = get_unreliable_data();
+        unreliable_data.message.vaa_version = 2;
+        let result = decode_and_verify_update(
+            &get_wormhole_pid(),
+            &get_accumulator_address(),
+            get_update(unreliable_data),
+        );
+        assert_eq!(result.unwrap_err().to_string(), INVALID_VAA_VERSION);
+    }
+
+    #[test]
     fn test_decode_and_verify_update_invalid_emitter_address() {
         let mut unreliable_data = get_unreliable_data();
         unreliable_data.emitter_address = Pubkey::new_unique().to_bytes();
