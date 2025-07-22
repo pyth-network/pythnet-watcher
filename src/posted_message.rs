@@ -127,4 +127,55 @@ mod tests {
         let decoded = PostedMessageUnreliableData::try_from_slice(encoded.as_slice()).unwrap();
         assert_eq!(decoded, post_message_unreliable_data);
     }
+
+    #[test]
+    fn test_invalid_magic() {
+        let post_message_unreliable_data = PostedMessageUnreliableData {
+            message: MessageData {
+                vaa_version: 1,
+                consistency_level: 2,
+                vaa_time: 3,
+                vaa_signature_account: [4u8; 32],
+                submission_time: 5,
+                nonce: 6,
+                sequence: 7,
+                emitter_chain: 8,
+                emitter_address: [9u8; 32],
+                payload: vec![10u8; 32],
+            },
+        };
+
+        let mut encoded = borsh::to_vec(&post_message_unreliable_data).unwrap();
+        encoded[0..3].copy_from_slice(b"foo"); // Invalid magic
+
+        let err = PostedMessageUnreliableData::try_from_slice(encoded.as_slice()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Magic mismatch. Expected [109, 115, 117] but got [102, 111, 111]"
+        );
+    }
+
+    #[test]
+    fn test_invalid_data_length() {
+        let post_message_unreliable_data = PostedMessageUnreliableData {
+            message: MessageData {
+                vaa_version: 1,
+                consistency_level: 2,
+                vaa_time: 3,
+                vaa_signature_account: [4u8; 32],
+                submission_time: 5,
+                nonce: 6,
+                sequence: 7,
+                emitter_chain: 8,
+                emitter_address: [9u8; 32],
+                payload: vec![10u8; 32],
+            },
+        };
+
+        let mut encoded = borsh::to_vec(&post_message_unreliable_data).unwrap();
+        encoded = encoded[0..encoded.len() - 1].to_vec();
+
+        let err = PostedMessageUnreliableData::try_from_slice(encoded.as_slice()).unwrap_err();
+        assert_eq!(err.to_string(), "Unexpected length of input");
+    }
 }

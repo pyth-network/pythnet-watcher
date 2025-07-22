@@ -61,6 +61,7 @@ const INVALID_UNRELIABLE_DATA_FORMAT: &str = "Invalid unreliable data format";
 const INVALID_PDA_MESSAGE: &str = "Invalid PDA message";
 const INVALID_EMITTER_CHAIN: &str = "Invalid emitter chain";
 const INVALID_ACCUMULATOR_ADDRESS: &str = "Invalid accumulator address";
+const INVALID_VAA_VERSION: &str = "Invalid VAA version";
 
 fn decode_and_verify_update(
     wormhole_pid: &Pubkey,
@@ -86,6 +87,14 @@ fn decode_and_verify_update(
             );
             anyhow::anyhow!(format!("{}: {}", INVALID_UNRELIABLE_DATA_FORMAT, e))
         })?;
+
+    if unreliable_data.message.vaa_version != 1 {
+        tracing::error!(
+            vaa_version = unreliable_data.message.vaa_version,
+            "Unsupported VAA version"
+        );
+        return Err(anyhow::anyhow!(INVALID_VAA_VERSION));
+    }
 
     if Chain::Pythnet != unreliable_data.emitter_chain.into() {
         tracing::error!(
@@ -320,7 +329,7 @@ mod tests {
     use secp256k1::SecretKey;
     use solana_account_decoder::{UiAccount, UiAccountData};
 
-    use crate::posted_message::MessageData;
+    use crate::{posted_message::MessageData, signer::MockSigner};
 
     fn get_wormhole_pid() -> Pubkey {
         Pubkey::from_str("H3fxXJ86ADW2PNuDDmZJg6mzTtPxkYCpNuQUTgmJ7AjU").unwrap()
@@ -528,6 +537,23 @@ mod tests {
         assert_eq!(
             hex::encode(signer.get_public_key().expect("Failed to get public key").1),
             "30e41be3f10d3ac813f91e49e189bbb948d030be",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_error() {
+        let mut mock_signer = MockSigner::new();
+        mock_signer
+            .expect_sign()
+            .return_once(|_| Err(anyhow::anyhow!("Mock signing error")));
+        let unreliable_data = get_unreliable_data();
+        let body = message_data_to_body(&unreliable_data);
+        let err = Observation::try_new(body, Arc::new(mock_signer))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Failed to sign observation: Mock signing error"
         );
     }
 }

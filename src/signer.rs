@@ -1,5 +1,5 @@
 use der::{
-    asn1::{AnyRef, BitStringRef, UintRef},
+    asn1::{AnyRef, BitStringRef},
     oid::ObjectIdentifier,
     Decode, Sequence,
 };
@@ -13,12 +13,13 @@ use std::{
 use async_trait::async_trait;
 use prost::Message as ProstMessage;
 use secp256k1::{
-    ecdsa::{RecoverableSignature, RecoveryId},
+    ecdsa::{RecoverableSignature, RecoveryId, Signature},
     Message, PublicKey, Secp256k1, SecretKey,
 };
 use sequoia_openpgp::armor::{Kind, Reader, ReaderMode};
 use sha3::{Digest, Keccak256};
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Signer: Send + Sync {
     async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]>;
@@ -181,12 +182,6 @@ pub struct SubjectPublicKeyInfo<'a> {
     pub subject_public_key: BitStringRef<'a>,
 }
 
-#[derive(Sequence)]
-struct EcdsaSignature<'a> {
-    r: UintRef<'a>,
-    s: UintRef<'a>,
-}
-
 #[async_trait]
 impl Signer for KMSSigner {
     async fn sign(&self, data: [u8; 32]) -> anyhow::Result<[u8; 65]> {
@@ -204,14 +199,10 @@ impl Signer for KMSSigner {
             .signature
             .ok_or_else(|| anyhow::anyhow!("KMS did not return a signature"))?;
 
-        let decoded_signature = EcdsaSignature::from_der(kms_signature.as_ref())
-            .map_err(|e| anyhow::anyhow!("Failed to decode SubjectPublicKeyInfo: {}", e))?;
-
-        let r_bytes = decoded_signature.r.as_bytes();
-        let s_bytes = decoded_signature.s.as_bytes();
-        let mut signature = [0u8; 65];
-        signature[(32 - r_bytes.len())..32].copy_from_slice(r_bytes);
-        signature[(64 - s_bytes.len())..64].copy_from_slice(decoded_signature.s.as_bytes());
+        let mut signature = Signature::from_der(kms_signature.as_ref())
+            .map_err(|e| anyhow::anyhow!("Failed to decode signature from KMS: {}", e))?;
+        signature.normalize_s();
+        let signature_bytes = signature.serialize_compact();
 
         let public_key = self.get_public_key()?;
         for raw_id in 0..4 {
@@ -220,10 +211,12 @@ impl Signer for KMSSigner {
                 .map_err(|e| anyhow::anyhow!("Failed to create RecoveryId: {}", e))?;
             if let Ok(recovered_public_key) = secp.recover_ecdsa(
                 &Message::from_digest(data),
-                &RecoverableSignature::from_compact(&signature[..64], recid)
+                &RecoverableSignature::from_compact(&signature_bytes, recid)
                     .map_err(|e| anyhow::anyhow!("Failed to create RecoverableSignature: {}", e))?,
             ) {
                 if recovered_public_key == public_key.0 {
+                    let mut signature = [0u8; 65];
+                    signature[..64].copy_from_slice(&signature_bytes);
                     signature[64] = raw_id as u8;
                     return Ok(signature);
                 }
