@@ -201,6 +201,9 @@ impl Signer for KMSSigner {
 
         let mut signature = Signature::from_der(kms_signature.as_ref())
             .map_err(|e| anyhow::anyhow!("Failed to decode signature from KMS: {}", e))?;
+        // NOTE: AWS KMS does not guarantee that the ECDSA signature is normalized.
+        // Therefore, we must normalize it ourselves to prevent malleability,
+        // so that it can be successfully verified later using the secp256k1 standard libraries.
         signature.normalize_s();
         let signature_bytes = signature.serialize_compact();
 
