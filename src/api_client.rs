@@ -148,7 +148,7 @@ mod tests {
         let digest = body.digest().expect("Failed to compute digest");
         let message = Message::from_digest(digest.secp256k_hash);
 
-        let recovery_id: RecoveryId = (observation.signature[64] as i32)
+        let recovery_id: RecoveryId = i32::from(observation.signature[64])
             .try_into()
             .expect("Invalid recovery ID");
         let recoverable_sig =
@@ -194,7 +194,10 @@ mod tests {
         let message = parsed["body"].as_array().expect("Body should be an array");
         let bytes = message
             .iter()
-            .map(|v| v.as_u64().expect("Body elements should be u64") as u8)
+            .map(|v| {
+                u8::try_from(v.as_u64().expect("Body elements should be u64"))
+                    .expect("Failed to convert to u8")
+            })
             .collect::<Vec<u8>>();
         let deserialized: Body<&RawMessage> =
             serde_wormhole::from_slice(&bytes).expect("Failed to deserialize body");

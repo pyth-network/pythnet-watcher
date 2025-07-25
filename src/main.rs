@@ -3,6 +3,7 @@ use {
         config::Command,
         signer::{GuardianKey, Signer, GUARDIAN_KEY_ARMORED_BLOCK, STANDARD_ARMOR_LINE_HEADER},
     },
+    anyhow::Context,
     api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
@@ -215,27 +216,27 @@ async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn S
     }
 }
 
-async fn run(run_options: config::RunOptions) {
+async fn run(run_options: config::RunOptions) -> anyhow::Result<()> {
     let signer = get_signer(run_options.clone())
         .await
-        .expect("Failed to create signer");
+        .context("Failed to create signer")?;
     let client = PubsubClient::new(&run_options.pythnet_url)
         .await
-        .expect("Invalid WebSocket URL");
+        .context("Invalid WebSocket URL")?;
     drop(client); // Drop the client to avoid holding the connection open
     let accumulator_address = Pubkey::from_str("G9LV2mp9ua1znRAfYwZz5cPiJMAbo1T6mbjdQsDZuMJg")
-        .expect("Invalid accumulator address");
+        .context("Invalid accumulator address")?;
     let wormhole_pid =
-        Pubkey::from_str(&run_options.wormhole_pid).expect("Invalid Wormhole program ID");
+        Pubkey::from_str(&run_options.wormhole_pid).context("Invalid Wormhole program ID")?;
     let api_clients: Vec<ApiClient> = run_options
         .server_urls
         .into_iter()
-        .map(|server_url| {
-            ApiClient::try_new(server_url, None).expect("Failed to create API client")
-        })
-        .collect();
+        .map(|server_url| ApiClient::try_new(server_url, None))
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
+    let (pubkey, pubkey_evm) = signer
+        .get_public_key()
+        .context("Failed to get public key")?;
     let evm_encded_public_key = format!("0x{}", hex::encode(pubkey_evm));
     tracing::info!(
         public_key = ?pubkey,
@@ -260,7 +261,7 @@ async fn run(run_options: config::RunOptions) {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     // Initialize a Tracing Subscriber
     let fmt_builder = tracing_subscriber::fmt()
         .with_file(false)
@@ -272,16 +273,16 @@ async fn main() {
     // Use the compact formatter if we're in a terminal, otherwise use the JSON formatter.
     if std::io::stderr().is_terminal() {
         tracing::subscriber::set_global_default(fmt_builder.compact().finish())
-            .expect("Failed to set global default subscriber");
+            .context("Failed to set global default subscriber")?;
     } else {
         tracing::subscriber::set_global_default(fmt_builder.json().finish())
-            .expect("Failed to set global default subscriber");
+            .context("Failed to set global default subscriber")?;
     }
 
     // Parse the command line arguments with StructOpt, will exit automatically on `--help` or
     // with invalid arguments.
     match Command::parse() {
-        Command::Run(run_options) => run(run_options).await,
+        Command::Run(run_options) => run(run_options).await?,
         Command::GenerateKey(opts) => {
             let secp = Secp256k1::new();
             let mut rng = OsRng;
@@ -289,7 +290,9 @@ async fn main() {
             // Generate keypair (secret + public key)
             let (secret_key, _) = secp.generate_keypair(&mut rng);
             let signer = signer::FileSigner { secret_key };
-            let (pubkey, pubkey_evm) = signer.get_public_key().expect("Failed to get public key");
+            let (pubkey, pubkey_evm) = signer
+                .get_public_key()
+                .context("Failed to get public key")?;
 
             let guardian_key = GuardianKey {
                 data: secret_key.secret_bytes().to_vec(),
@@ -300,24 +303,25 @@ async fn main() {
                 Kind::SecretKey,
                 vec![("PublicKey", format!("0x{}", hex::encode(pubkey_evm)))],
             )
-            .expect("Failed to create writer");
+            .context("Failed to create writer")?;
             writer
                 .write_all(guardian_key.encode_to_vec().as_slice())
-                .expect("Failed to write GuardianKey to writer");
-            let buffer = writer.finalize().expect("Failed to finalize writer");
+                .context("Failed to write GuardianKey to writer")?;
+            let buffer = writer.finalize().context("Failed to finalize writer")?;
             let armored_string =
-                String::from_utf8(buffer).expect("Failed to convert buffer to string");
+                String::from_utf8(buffer).context("Failed to convert buffer to string")?;
             let armored_string =
                 armored_string.replace(STANDARD_ARMOR_LINE_HEADER, GUARDIAN_KEY_ARMORED_BLOCK);
 
-            fs::write(&opts.output_path, armored_string)
-                .expect("Failed to write GuardianKey to file");
+            fs::write(&opts.output_path, armored_string).context("Failed to write key to file")?;
 
             tracing::info!("Generated secret key at: {}", opts.output_path);
             tracing::info!("Public key: {}", pubkey);
             tracing::info!("EVM encoded public key: 0x{}", hex::encode(pubkey_evm));
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

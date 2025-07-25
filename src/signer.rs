@@ -87,7 +87,11 @@ fn get_evm_address(public_key: &PublicKey) -> anyhow::Result<[u8; 20]> {
     let pubkey_hash: [u8; 32] = Keccak256::new_with_prefix(&pubkey_uncompressed[1..])
         .finalize()
         .into();
-    let pubkey_evm: [u8; 20] = pubkey_hash[pubkey_hash.len() - 20..]
+    let pubkey_evm: [u8; 20] = pubkey_hash
+        .get(pubkey_hash.len() - 20..)
+        .ok_or(anyhow::anyhow!(
+            "Failed to get EVM address from public key hash"
+        ))?
         .try_into()
         .map_err(|e| anyhow::anyhow!("Failed to convert public key hash to EVM format: {}", e))?;
     Ok(pubkey_evm)
@@ -102,7 +106,7 @@ impl Signer for FileSigner {
         let recovery_id: i32 = recovery_id.into();
         let mut signature = [0u8; 65];
         signature[..64].copy_from_slice(&signature_bytes);
-        signature[64] = recovery_id as u8;
+        signature[64] = u8::try_from(recovery_id)?;
         Ok(signature)
     }
 
@@ -220,7 +224,7 @@ impl Signer for KMSSigner {
                 if recovered_public_key == public_key.0 {
                     let mut signature = [0u8; 65];
                     signature[..64].copy_from_slice(&signature_bytes);
-                    signature[64] = raw_id as u8;
+                    signature[64] = u8::try_from(raw_id)?;
                     return Ok(signature);
                 }
             }
