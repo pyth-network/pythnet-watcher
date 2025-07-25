@@ -70,7 +70,9 @@ impl BorshDeserialize for PostedMessageUnreliableData {
         }
 
         let expected = b"msu";
-        let magic: &[u8] = &buf[0..3];
+        let magic: &[u8] = buf
+            .get(0..3)
+            .ok_or(Error::new(InvalidData, "Failed to get magic bytes"))?;
         if magic != expected {
             return Err(Error::new(
                 InvalidData,
@@ -80,7 +82,9 @@ impl BorshDeserialize for PostedMessageUnreliableData {
                 ),
             ));
         };
-        *buf = &buf[3..];
+        *buf = buf
+            .get(3..)
+            .ok_or(Error::new(InvalidData, "Failed to get remaining bytes"))?;
         Ok(PostedMessageUnreliableData {
             message: <MessageData as BorshDeserialize>::deserialize(buf)?,
         })
