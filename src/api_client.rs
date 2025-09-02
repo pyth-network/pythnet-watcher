@@ -3,6 +3,7 @@ use {
     reqwest::{Client, Url},
     serde::Serialize,
     std::{sync::Arc, time::Duration},
+    tokio::time::Instant,
     wormhole_sdk::vaa::Body,
 };
 
@@ -83,11 +84,13 @@ impl ApiClient {
         &self,
         observation: Observation<P>,
     ) -> Result<(), anyhow::Error> {
+        let started = Instant::now();
         let url = self
             .inner
             .base_url
             .join("observation")
             .map_err(|e| anyhow::anyhow!("Failed to construct URL: {}", e))?;
+
         let response = self
             .inner
             .client
@@ -95,7 +98,28 @@ impl ApiClient {
             .json(&observation)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to post observation: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to post observation: {}", e));
+
+        let base_url = self.inner.base_url.clone();
+        let duration = started.elapsed();
+        metrics::histogram!(
+            "post_observation_duration",
+            &[("url", base_url.to_string())]
+        )
+        .record(duration.as_secs_f64());
+        let status = match &response {
+            Ok(resp) => resp.status().as_u16(),
+            Err(_) => 0,
+        };
+        metrics::counter!(
+            "post_observation",
+            &[
+                ("status", status.to_string()),
+                ("url", base_url.to_string()),
+            ]
+        )
+        .increment(1);
+        let response = response?;
 
         if response.status().is_success() {
             Ok(())

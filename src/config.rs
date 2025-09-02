@@ -26,6 +26,12 @@ pub struct RunOptions {
     /// https://github.com/wormhole-foundation/wormhole/blob/main/docs/guardian_signer.md
     #[arg(long = "signer-uri", env = "SIGNER_URI")]
     pub signer_uri: String,
+    #[arg(
+        long = "metrics-addr",
+        env = "METRICS_ADDR",
+        default_value = "127.0.0.1:9001"
+    )]
+    pub metrics_addr: String,
 }
 
 #[derive(Parser, Clone, Debug)]
