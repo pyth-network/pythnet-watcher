@@ -85,6 +85,7 @@ This will save the key in raw byte format to the file named `.secret`.
 
 To test in a non-production environment (e.g. with devnet or a local Pythnet fork), just provide a different `--pythnet-url`, and `--server-url`, and optionally use custom `--wormhole-pid`.
 
+---
 
 ### 📊 Metrics
 
