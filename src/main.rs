@@ -171,10 +171,10 @@ async fn run_listener(input: RunListenerInput) -> anyhow::Result<()> {
                 "success"
             };
             let duration = started.elapsed();
-            metrics::histogram!("decode_and_verify_update_duration").record(
+            metrics::histogram!("decode_and_verify_observed_messages_duration").record(
                 duration.as_secs_f64(),
             );
-            metrics::counter!("decode_and_verify_update", &[("status", status)]).increment(1);
+            metrics::counter!("decode_and_verify_observed_messages", &[("status", status)]).increment(1);
             if let Ok(unreliable_data) = unreliable_data {
                 tokio::spawn({
                     let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
