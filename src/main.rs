@@ -1,13 +1,15 @@
 use {
     crate::{
         config::Command,
+        metrics_server::setup_metrics_recorder,
         signer::{GuardianKey, Signer, GUARDIAN_KEY_ARMORED_BLOCK, STANDARD_ARMOR_LINE_HEADER},
     },
-    anyhow::Context,
+    anyhow::{bail, Context},
     api_client::{ApiClient, Observation},
     borsh::BorshDeserialize,
     clap::Parser,
     futures::future::join_all,
+    lazy_static::lazy_static,
     posted_message::PostedMessageUnreliableData,
     prost::Message,
     reqwest::Url,
@@ -17,7 +19,6 @@ use {
     solana_account_decoder::UiAccountEncoding,
     solana_client::{
         nonblocking::pubsub_client::PubsubClient,
-        pubsub_client::PubsubClientError,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
         rpc_filter::{Memcmp, RpcFilterType},
         rpc_response::{Response, RpcKeyedAccount},
@@ -25,18 +26,23 @@ use {
     solana_sdk::pubkey::Pubkey,
     std::{
         fs,
+        future::Future,
         io::{IsTerminal, Write},
         str::FromStr,
         sync::Arc,
         time::Duration,
     },
-    tokio::time::sleep,
+    tokio::{
+        sync::watch,
+        time::{sleep, Instant},
+    },
     tokio_stream::StreamExt,
     wormhole_sdk::{vaa::Body, Address, Chain},
 };
 
 mod api_client;
 mod config;
+mod metrics_server;
 mod posted_message;
 mod signer;
 
@@ -128,7 +134,7 @@ fn message_data_to_body(unreliable_data: &PostedMessageUnreliableData) -> Body<&
     }
 }
 
-async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> {
+async fn run_listener(input: RunListenerInput) -> anyhow::Result<()> {
     let client = PubsubClient::new(input.ws_url.as_str()).await?;
     let (mut stream, unsubscribe) = client
         .program_subscribe(
@@ -150,43 +156,69 @@ async fn run_listener(input: RunListenerInput) -> Result<(), PubsubClientError> 
         )
         .await?;
 
-    while let Some(update) = stream.next().await {
-        let unreliable_data =
-            match decode_and_verify_update(&input.wormhole_pid, &input.accumulator_address, update)
-            {
-                Ok(data) => data,
-                Err(_) => continue,
+    tokio::select! {
+        update = stream.next() => {
+            let Some(update) = update else {
+                tracing::error!("Failed to receive update");
+                tokio::spawn(async move { unsubscribe().await });
+                bail!("Stream ended");
             };
-
-        tokio::spawn({
-            let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
-            async move {
-                let body = message_data_to_body(&unreliable_data);
-                match Observation::try_new(body.clone(), signer.clone()).await {
-                    Ok(observation) => {
-                        join_all(api_clients.iter().map(|api_client| {
-                            let observation = observation.clone();
-                            let api_client = api_client.clone();
-                            async move {
-                                if let Err(e) = api_client.post_observation(observation).await {
-                                    tracing::warn!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
-                                } else {
-                                    tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
-                                }
+            let started = Instant::now();
+            let unreliable_data = decode_and_verify_update(&input.wormhole_pid, &input.accumulator_address, update);
+            let status = if unreliable_data.is_err() {
+                "error"
+            } else {
+                "success"
+            };
+            let duration = started.elapsed();
+            metrics::histogram!("decode_and_verify_observed_messages_duration").record(
+                duration.as_secs_f64(),
+            );
+            metrics::counter!("decode_and_verify_observed_messages", &[("status", status)]).increment(1);
+            if let Ok(unreliable_data) = unreliable_data {
+                tokio::spawn({
+                    let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
+                    async move {
+                        let started = Instant::now();
+                        let body = message_data_to_body(&unreliable_data);
+                        let status = match Observation::try_new(body.clone(), signer.clone()).await {
+                            Ok(observation) => {
+                                join_all(api_clients.iter().map(|api_client| {
+                                    let observation = observation.clone();
+                                    let api_client = api_client.clone();
+                                    async move {
+                                        if let Err(e) = api_client.post_observation(observation).await {
+                                            tracing::warn!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
+                                        } else {
+                                            tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
+                                        }
+                                    }
+                                })).await;
+                                "success"
                             }
-                        })).await;
+                            Err(e) => {
+                                tracing::error!(error = ?e, "Failed to create observation");
+                                "error"
+                            }
+                        };
+                        let duration = started.elapsed();
+                        metrics::histogram!("create_and_post_observation_duration").record(
+                            duration.as_secs_f64(),
+                        );
+                        metrics::counter!("create_and_post_observation", &[("status", status)]).increment(1);
                     }
-                    Err(e) => tracing::error!(error = ?e, "Failed to create observation"),
-                }
+                });
             }
-        });
+        }
+        _ = wait_for_exit() => {
+            tracing::info!("Received exit signal, stopping pythnet watcher");
+            return Ok(())
+        }
     }
 
     tokio::spawn(async move { unsubscribe().await });
 
-    Err(PubsubClientError::ConnectionClosed(
-        "Stream ended".to_string(),
-    ))
+    bail!("Stream ended")
 }
 
 async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn Signer>> {
@@ -216,6 +248,54 @@ async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn S
     }
 }
 
+lazy_static! {
+    /// A static exit flag to indicate to running threads that we're shutting down. This is used to
+    /// gracefully shut down the application.
+    ///
+    /// We make this global based on the fact the:
+    /// - The `Sender` side does not rely on any async runtime.
+    /// - Exit logic doesn't really require carefully threading this value through the app.
+    /// - The `Receiver` side of a watch channel performs the detection based on if the change
+    ///   happened after the subscribe, so it means all listeners should always be notified
+    ///   correctly.
+
+    static ref EXIT: watch::Sender<bool> = watch::channel(false).0;
+}
+
+pub async fn wait_for_exit() {
+    let mut rx = EXIT.subscribe();
+    // Check if the exit flag is already set, if so, we don't need to wait.
+    if !(*rx.borrow()) {
+        // Wait until the exit flag is set.
+        let _ = rx.changed().await;
+    }
+}
+
+async fn fault_tolerant_handler<F, Fut>(name: String, f: F)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    loop {
+        let res = tokio::spawn(f()).await;
+        match res {
+            Ok(result) => match result {
+                Ok(_) => break, // This will happen on graceful shutdown
+                Err(err) => {
+                    tracing::error!("{} returned error: {:?}", name, err);
+                    sleep(Duration::from_millis(500)).await;
+                }
+            },
+            Err(err) => {
+                tracing::error!("{} is panicked or canceled: {:?}", name, err);
+                EXIT.send_modify(|exit| *exit = true);
+                break;
+            }
+        }
+    }
+}
+
 async fn run(run_options: config::RunOptions) -> anyhow::Result<()> {
     let signer = get_signer(run_options.clone())
         .await
@@ -230,6 +310,7 @@ async fn run(run_options: config::RunOptions) -> anyhow::Result<()> {
         Pubkey::from_str(&run_options.wormhole_pid).context("Invalid Wormhole program ID")?;
     let api_clients: Vec<ApiClient> = run_options
         .server_urls
+        .clone()
         .into_iter()
         .map(|server_url| ApiClient::try_new(server_url, None))
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -244,20 +325,33 @@ async fn run(run_options: config::RunOptions) -> anyhow::Result<()> {
         "Running listener...",
     );
 
-    loop {
-        if let Err(e) = run_listener(RunListenerInput {
-            ws_url: run_options.pythnet_url.clone(),
-            signer: signer.clone(),
-            wormhole_pid,
-            accumulator_address,
-            api_clients: api_clients.clone(),
-        })
-        .await
-        {
-            tracing::error!(error = ?e, "Error listening to messages");
-            sleep(Duration::from_millis(200)).await; // Wait before retrying
+    // Listen for Ctrl+C so we can set the exit flag and wait for a graceful shutdown.
+    tokio::spawn(async move {
+        tracing::info!("Registered shutdown signal handler...");
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("Shut down signal received, waiting for tasks...");
+            EXIT.send_modify(|exit| *exit = true);
         }
-    }
+    });
+
+    let metrics_recorder = setup_metrics_recorder()?;
+    tokio::join!(
+        fault_tolerant_handler("Metrics Server".to_string(), {
+            let run_options = run_options.clone();
+            move || metrics_server::run(run_options.clone(), metrics_recorder.clone())
+        }),
+        fault_tolerant_handler("Listener".to_string(), move || run_listener(
+            RunListenerInput {
+                ws_url: run_options.pythnet_url.clone(),
+                signer: signer.clone(),
+                wormhole_pid,
+                accumulator_address,
+                api_clients: api_clients.clone(),
+            }
+        )),
+    );
+
+    Ok(())
 }
 
 #[tokio::main]

@@ -84,3 +84,10 @@ This will save the key in raw byte format to the file named `.secret`.
 ### 🧪 Testing Locally
 
 To test in a non-production environment (e.g. with devnet or a local Pythnet fork), just provide a different `--pythnet-url`, and `--server-url`, and optionally use custom `--wormhole-pid`.
+
+---
+
+### 📊 Metrics
+
+By default, running the watcher exposes metrics at `http://127.0.0.1:9001`.
+You can change the metrics endpoint by passing the `--metrics-addr` flag or setting the `METRICS_ADDR` environment variable.
