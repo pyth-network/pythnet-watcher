@@ -156,69 +156,74 @@ async fn run_listener(input: RunListenerInput) -> anyhow::Result<()> {
         )
         .await?;
 
-    tokio::select! {
-        update = stream.next() => {
-            let Some(update) = update else {
-                tracing::error!("Failed to receive update");
-                tokio::spawn(async move { unsubscribe().await });
-                bail!("Stream ended");
-            };
-            let started = Instant::now();
-            let unreliable_data = decode_and_verify_update(&input.wormhole_pid, &input.accumulator_address, update);
-            let status = if unreliable_data.is_err() {
-                "error"
-            } else {
-                "success"
-            };
-            let duration = started.elapsed();
-            metrics::histogram!("decode_and_verify_observed_messages_duration").record(
-                duration.as_secs_f64(),
-            );
-            metrics::counter!("decode_and_verify_observed_messages", &[("status", status)]).increment(1);
-            if let Ok(unreliable_data) = unreliable_data {
-                tokio::spawn({
-                    let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
-                    async move {
-                        let started = Instant::now();
-                        let body = message_data_to_body(&unreliable_data);
-                        let status = match Observation::try_new(body.clone(), signer.clone()).await {
-                            Ok(observation) => {
-                                join_all(api_clients.iter().map(|api_client| {
-                                    let observation = observation.clone();
-                                    let api_client = api_client.clone();
-                                    async move {
-                                        if let Err(e) = api_client.post_observation(observation).await {
-                                            tracing::warn!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
-                                        } else {
-                                            tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
-                                        }
-                                    }
-                                })).await;
-                                "success"
-                            }
-                            Err(e) => {
-                                tracing::error!(error = ?e, "Failed to create observation");
-                                "error"
-                            }
-                        };
-                        let duration = started.elapsed();
-                        metrics::histogram!("create_and_post_observation_duration").record(
-                            duration.as_secs_f64(),
-                        );
-                        metrics::counter!("create_and_post_observation", &[("status", status)]).increment(1);
-                    }
-                });
-            }
-        }
-        _ = wait_for_exit() => {
-            tracing::info!("Received exit signal, stopping pythnet watcher");
-            return Ok(())
-        }
+    let mut exit_receiver = EXIT.subscribe();
+    // Check if the exit flag is already set, if so, we don't need to wait.
+    if *exit_receiver.borrow() {
+        tracing::info!("Received exit signal, stopping pythnet watcher");
+        return Ok(());
     }
 
-    tokio::spawn(async move { unsubscribe().await });
-
-    bail!("Stream ended")
+    loop {
+        tokio::select! {
+            update = stream.next() => {
+                let Some(update) = update else {
+                    tracing::error!("Failed to receive update");
+                    tokio::spawn(async move { unsubscribe().await });
+                    bail!("Stream ended");
+                };
+                let started = Instant::now();
+                let unreliable_data = decode_and_verify_update(&input.wormhole_pid, &input.accumulator_address, update);
+                let status = if unreliable_data.is_err() {
+                    "error"
+                } else {
+                    "success"
+                };
+                let duration = started.elapsed();
+                metrics::histogram!("decode_and_verify_observed_messages_duration").record(
+                    duration.as_secs_f64(),
+                );
+                metrics::counter!("decode_and_verify_observed_messages", &[("status", status)]).increment(1);
+                if let Ok(unreliable_data) = unreliable_data {
+                    tokio::spawn({
+                        let (api_clients, signer) = (input.api_clients.clone(), input.signer.clone());
+                        async move {
+                            let started = Instant::now();
+                            let body = message_data_to_body(&unreliable_data);
+                            let status = match Observation::try_new(body.clone(), signer.clone()).await {
+                                Ok(observation) => {
+                                    join_all(api_clients.iter().map(|api_client| {
+                                        let observation = observation.clone();
+                                        let api_client = api_client.clone();
+                                        async move {
+                                            if let Err(e) = api_client.post_observation(observation).await {
+                                                tracing::warn!(url = api_client.get_base_url().to_string(), error = ?e, "Failed to post observation");
+                                            } else {
+                                                tracing::info!(url = api_client.get_base_url().to_string(), "Observation posted successfully");
+                                            }
+                                        }
+                                    })).await;
+                                    "success"
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = ?e, "Failed to create observation");
+                                    "error"
+                                }
+                            };
+                            let duration = started.elapsed();
+                            metrics::histogram!("create_and_post_observation_duration").record(
+                                duration.as_secs_f64(),
+                            );
+                            metrics::counter!("create_and_post_observation", &[("status", status)]).increment(1);
+                        }
+                    });
+                }
+            }
+            _ = exit_receiver.changed() => {
+                tracing::info!("Received exit signal, stopping pythnet watcher");
+                return Ok(())
+            }
+        }
+    }
 }
 
 async fn get_signer(run_options: config::RunOptions) -> anyhow::Result<Arc<dyn Signer>> {
@@ -292,6 +297,10 @@ where
                 EXIT.send_modify(|exit| *exit = true);
                 break;
             }
+        }
+
+        if *EXIT.borrow() {
+            break;
         }
     }
 }
