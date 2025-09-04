@@ -298,6 +298,10 @@ where
                 break;
             }
         }
+
+        if *EXIT.borrow() {
+            break;
+        }
     }
 }
 
